@@ -1,0 +1,66 @@
+--- a/smojol-core/src/main/java/org/smojol/common/vm/expression/AdditionalConditionVisitor.java
++++ b/smojol-core/src/main/java/org/smojol/common/vm/expression/AdditionalConditionVisitor.java
+@@ -1,5 +1,7 @@
+ package org.smojol.common.vm.expression;
+ 
++import java.util.logging.Logger;
++
+ import org.eclipse.lsp.cobol.core.CobolParser;
+ import org.smojol.common.vm.structure.CobolDataStructure;
+ 
+@@ -47,7 +49,17 @@ public class AdditionalConditionVisitor extends AntlrCobolExpressionVisitor {
+     }
+ 
+     public ComparisonOperator getRelationalOperation() {
+-        return ((SimpleConditionExpression) expression).getComparison().getRelationalOperation();
++        // Local patch (Azure-Samples/COBOL-Modernization-Agents): mirrors
++        // the ConditionVisitor fix — a standalone/level-88-style additional
++        // condition term has no comparison object, so getComparison() can
++        // legitimately be null. Guard it instead of letting the NPE abort
++        // the whole program's parse.
++        RelationExpression comparison = ((SimpleConditionExpression) expression).getComparison();
++        if (comparison == null) {
++            Logger.getLogger(AdditionalConditionVisitor.class.getName()).warning("Standalone additional condition term with no relational comparison (Azure-Samples local patch).");
++            return null;
++        }
++        return comparison.getRelationalOperation();
+     }
+ 
+     public CobolExpression getLhs() {
+--- a/smojol-core/src/main/java/org/smojol/common/vm/expression/ConditionVisitor.java
++++ b/smojol-core/src/main/java/org/smojol/common/vm/expression/ConditionVisitor.java
+@@ -1,5 +1,7 @@
+ package org.smojol.common.vm.expression;
+ 
++import java.util.logging.Logger;
++
+ import org.eclipse.lsp.cobol.core.CobolParser;
+ import org.smojol.common.vm.structure.CobolDataStructure;
+ 
+@@ -25,7 +27,25 @@ public class ConditionVisitor extends AntlrCobolExpressionVisitor {
+         // TODO: Handle dialect nodes, currently will fail if dialect node is present
+         if (ctx.additionalCondition().isEmpty()) return expression;
+         CobolExpression modifiedExpression = expression;
+-        ComparisonOperator mostRecentOperator = expression.getClass() == SimpleConditionExpression.class ? ((SimpleConditionExpression) expression).getComparison().getRelationalOperation() : null;
++        ComparisonOperator mostRecentOperator;
++        // Local patch (Azure-Samples/COBOL-Modernization-Agents): a
++        // SimpleConditionExpression's comparison is legitimately null for
++        // standalone/level-88-style terms inside an abbreviated combined
++        // condition (e.g. "IF A = 1 OR B"). Upstream unconditionally calls
++        // .getComparison().getRelationalOperation(), which NPEs when the
++        // comparison is null. Guard it so the AST still ships instead of
++        // aborting the whole program.
++        if (expression.getClass() == SimpleConditionExpression.class) {
++            RelationExpression comparison = ((SimpleConditionExpression) expression).getComparison();
++            if (comparison == null) {
++                Logger.getLogger(ConditionVisitor.class.getName()).warning("Standalone condition term with no relational comparison (Azure-Samples local patch): " + ctx.getText());
++                mostRecentOperator = null;
++            } else {
++                mostRecentOperator = comparison.getRelationalOperation();
++            }
++        } else {
++            mostRecentOperator = null;
++        }
+         CobolExpression mostRecentLhs = expression.getClass() == SimpleConditionExpression.class ? ((SimpleConditionExpression) expression).getLhs() : null;
+         for (CobolParser.AdditionalConditionContext c : ctx.additionalCondition()) {
+             AdditionalConditionVisitor additionalConditionVisitor = new AdditionalConditionVisitor(mostRecentLhs, mostRecentOperator, dataRoot);

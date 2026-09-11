@@ -115,3 +115,28 @@ is available, logging a warning. Memory layout still resolves and downstream
 code continues.
 
 **Affected programs in corpus estate:** BATCH001 (1 program).
+
+## 0009-null-safe-relational-operation.patch
+
+**Files touched:**
+`smojol-core/src/main/java/org/smojol/common/vm/expression/ConditionVisitor.java`,
+`smojol-core/src/main/java/org/smojol/common/vm/expression/AdditionalConditionVisitor.java`
+
+**Problem.** Both visitors unconditionally call
+`((SimpleConditionExpression) expression).getComparison().getRelationalOperation()`
+when propagating the "most recent" relational operator across an abbreviated
+combined condition (e.g. `IF A = 1 OR B`). `SimpleConditionExpression.getComparison()`
+legitimately returns `null` for a standalone/level-88-style term that has no
+explicit comparison of its own — the constructor
+`SimpleConditionExpression(CobolExpression arithmeticExpression)` sets
+`comparison = null` by design. Calling `.getRelationalOperation()` on that
+null `RelationExpression` throws an NPE that aborts the whole program's
+parse (surfaced as `deps only — AST writer bug`).
+
+**Fix.** Guard both call sites; when the comparison is null, log a warning
+and fall back to `null` for the operator so downstream terms are still
+processed and the AST/CFG still ship instead of aborting.
+
+**Affected programs:** any program using abbreviated/combined conditions
+with a standalone final term (e.g. `IF X = 1 OR Y`), first observed in
+Azure-Samples/COBOL-Modernization-Agents on `P003L001.cbl`.
