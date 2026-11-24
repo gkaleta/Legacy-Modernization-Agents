@@ -10,8 +10,8 @@ public sealed record ExecPassResult(IReadOnlyList<ExecStatement> Statements, IRe
     public int Unsupported => Statements.Count(s => s.Status == ExecStatus.Unsupported);
 }
 
-// Standalone stand-in for the M3 statement parser: parses every EXEC block of a compilation, moves the characters of
-// understood blocks from Unsupported to Parsed, and re-labels the rest with the precise reason. Run once per result.
+// Accounts every EXEC block of a compilation (reusing the procedure parser's results): moves the characters of
+// understood blocks from Unsupported to Parsed and re-labels the rest with the precise reason. Run once per result.
 public static class ExecPass
 {
     public const string PendingReason = "exec-not-yet-parsed";
@@ -31,7 +31,11 @@ public static class ExecPass
                 continue;
             }
 
-            var statement = ExecParser.Parse(tokens, i);
+            if (!result.ParsedExecs.TryGetValue(i, out var statement))
+            {
+                statement = ExecParser.Parse(tokens, i);
+            }
+
             statements.Add(statement);
             diagnostics.AddRange(statement.Diagnostics);
             Account(result, token, statement);

@@ -6,7 +6,8 @@ namespace Starforge.Cobol.Syntax;
 
 public sealed record ParserOptions(bool DecimalPointIsComma = false);
 
-public sealed record ParseResult(CompilationUnitSyntax Syntax, IReadOnlyList<Diagnostic> Diagnostics);
+// ParsedExecs: EXEC blocks the procedure parser already parsed, by token index, so ExecPass need not re-parse them.
+public sealed record ParseResult(CompilationUnitSyntax Syntax, IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyDictionary<int, Exec.ExecStatement> ParsedExecs);
 
 public static class CobolParser
 {
@@ -16,7 +17,7 @@ public static class CobolParser
         var parser = new Parser(tokens, options ?? new ParserOptions());
         var unit = parser.ParseCompilationUnit();
         parser.ApplyCoverage(accounting);
-        return new ParseResult(unit, parser.Diagnostics);
+        return new ParseResult(unit, parser.Diagnostics, parser.ParsedExecs);
     }
 }
 
@@ -110,7 +111,7 @@ internal sealed partial class Parser
             }
             else if (proc is null && IsDivision(_pos, "PROCEDURE"))
             {
-                proc = ParseProcedure();
+                proc = ParseProcedure(data, env);
             }
             else if (IsDivision(_pos, "IDENTIFICATION") || IsDivision(_pos, "ID"))
             {
@@ -255,7 +256,7 @@ internal sealed partial class Parser
     private static bool IsCommentParagraphName(string word)
         => word.ToUpperInvariant() is "AUTHOR" or "INSTALLATION" or "DATE-WRITTEN" or "DATE-COMPILED" or "SECURITY" or "REMARKS";
 
-    private ProcedureDivision ParseProcedure()
+    private ProcedureDivision ParseProcedure(DataDivision? data, EnvironmentDivision? env)
     {
         var first = _pos;
         Next();
@@ -318,16 +319,22 @@ internal sealed partial class Parser
             AcceptPeriod();
         }
 
+        SetupProcedureContext(data, env);
+        _dataRefs.Clear();
+        _procRefs.Clear();
         var bodyFirst = _pos;
-        while (!AtEnd && !IsProcedureBoundary(_pos))
-        {
-            _marks[_pos] = Opaque;
-            _pos++;
-        }
-
+        var errorMark = _allErrors.Count;
+        var (declaratives, sections) = ParseProcedureBody();
+        errors.AddRange(_allErrors.Skip(errorMark));
         var body = SpanFrom(bodyFirst);
         var span = SpanFrom(first);
-        return new ProcedureDivision(span, RangeOf(span), usingList, returning, body, errors);
+        return new ProcedureDivision(span, RangeOf(span), usingList, returning, body, errors)
+        {
+            Declaratives = declaratives,
+            Sections = sections,
+            DataReferences = _dataRefs.ToArray(),
+            ProcedureReferences = _procRefs.ToArray(),
+        };
     }
 
     // The procedure body runs to a nested program, END PROGRAM, or the end of the compilation unit.

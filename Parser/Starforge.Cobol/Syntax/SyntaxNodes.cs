@@ -180,14 +180,32 @@ public enum PassingMode
 
 public sealed record UsingParameter(PassingMode Mode, QualifiedName Name);
 
-// M2 parses only the header; Body is the token range M3 will parse (left Lexed in coverage until then).
+// Body is the token range after the header; Errors holds header and body error nodes (statement-level ones included).
 public sealed record ProcedureDivision(
     NodeSpan Span,
     SourceRange Range,
     IReadOnlyList<UsingParameter> Using,
     QualifiedName? Returning,
     NodeSpan Body,
-    IReadOnlyList<ErrorNode> Errors) : SyntaxNode(Span, Range);
+    IReadOnlyList<ErrorNode> Errors) : SyntaxNode(Span, Range)
+{
+    public IReadOnlyList<ProcedureSection> Declaratives { get; init; } = Array.Empty<ProcedureSection>();
+
+    // The first section has a null Name when the body (or its start) is not inside a SECTION.
+    public IReadOnlyList<ProcedureSection> Sections { get; init; } = Array.Empty<ProcedureSection>();
+
+    public IReadOnlyList<DataRef> DataReferences { get; init; } = Array.Empty<DataRef>();
+
+    public IReadOnlyList<ProcedureRef> ProcedureReferences { get; init; } = Array.Empty<ProcedureRef>();
+
+    public IEnumerable<ProcedureSection> AllSections() => Declaratives.Concat(Sections);
+
+    public IEnumerable<Paragraph> AllParagraphs() => AllSections().SelectMany(s => s.Paragraphs);
+
+    public IEnumerable<Statement> AllStatements()
+        => AllSections().SelectMany(s => s.Leading.Concat(s.Paragraphs.SelectMany(p => p.Sentences)))
+            .SelectMany(s => s.Statements).SelectMany(Statement.SelfAndNested);
+}
 
 // EXEC ... END-EXEC kept opaque; its inner text is parsed by Starforge.Cobol.Exec.
 public sealed record ExecStatement(NodeSpan Span, SourceRange Range, ExecKind Kind) : SyntaxNode(Span, Range);

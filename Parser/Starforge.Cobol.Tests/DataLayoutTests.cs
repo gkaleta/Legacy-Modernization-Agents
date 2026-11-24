@@ -330,14 +330,14 @@ public sealed class DataLayoutTests
     }
 
     [Fact]
-    public void DataDivisionCharactersBecomeParsedAndProcedureBodyStaysLexed()
+    public void EveryCharacterOfASimpleProgramBecomesParsed()
     {
         using var estate = new TestEstate();
         var r = WorkingStorage(estate, A("01  REC PIC X."));
 
         r.Coverage.Count(CoverageClass.Parsed).Should().Be(
-            "IDENTIFICATIONDIVISION.PROGRAM-ID.MAIN.DATADIVISION.WORKING-STORAGESECTION.01RECPICX.PROCEDUREDIVISION.".Length);
-        r.Coverage.Count(CoverageClass.Lexed).Should().Be("GOBACK.".Length);
-        r.CountInProcedureBodies(CoverageClass.Lexed).Should().Be("GOBACK.".Length);
+            "IDENTIFICATIONDIVISION.PROGRAM-ID.MAIN.DATADIVISION.WORKING-STORAGESECTION.01RECPICX.PROCEDUREDIVISION.GOBACK.".Length);
+        r.Coverage.Count(CoverageClass.Lexed).Should().Be(0);
+        r.CountInProcedureBodies(CoverageClass.Parsed).Should().Be("GOBACK.".Length);
     }
 }

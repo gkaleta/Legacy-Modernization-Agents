@@ -12,7 +12,7 @@ public sealed class LexerTests
         using var estate = new TestEstate();
         var r = estate.Program(
             A("PROCEDURE DIVISION."),
-            B("MOVE 'IT''S' \"SAY \"\"HI\"\"\" X'C1F0' N'AB' NX'0041' G'XY'"),
+            B("DISPLAY 'IT''S' \"SAY \"\"HI\"\"\" X'C1F0' N'AB' NX'0041' G'XY'"),
             B("Z'NUL' B'1' BX'F' U'UTF' UX'41' -12 +3.5 .25 1.5E+03 12,"));
 
         r.KindsAndTexts().Skip(4).Should().Equal(

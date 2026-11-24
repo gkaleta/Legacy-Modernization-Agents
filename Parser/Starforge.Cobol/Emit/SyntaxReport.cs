@@ -10,9 +10,9 @@ public static class SyntaxReport
     public static void WritePrograms(Utf8JsonWriter w, CompilationResult r, PathDisplay paths)
     {
         w.WriteStartArray("programs");
-        foreach (var data in r.Programs)
+        for (var i = 0; i < r.Programs.Count; i++)
         {
-            WriteProgram(w, data, paths);
+            WriteProgram(w, r.Programs[i], i < r.Bindings.Count ? r.Bindings[i] : ProcedureBindings.Empty, paths);
         }
 
         w.WriteEndArray();
@@ -30,7 +30,7 @@ public static class SyntaxReport
         }
     }
 
-    private static void WriteProgram(Utf8JsonWriter w, ProgramData data, PathDisplay paths)
+    private static void WriteProgram(Utf8JsonWriter w, ProgramData data, ProcedureBindings bindings, PathDisplay paths)
     {
         var p = data.Program;
         w.WriteStartObject();
@@ -73,7 +73,7 @@ public static class SyntaxReport
             w.WriteEndArray();
         }
 
-        WriteDivisions(w, p, data, paths);
+        WriteDivisions(w, p, data, bindings, paths);
         WriteSpecialNames(w, p.Environment?.Configuration?.SpecialNames);
         WriteFiles(w, data, paths);
         w.WriteBoolean("slackBytesInserted", data.SlackBytesInserted);
@@ -95,7 +95,7 @@ public static class SyntaxReport
         w.WriteEndObject();
     }
 
-    private static void WriteDivisions(Utf8JsonWriter w, ProgramUnit p, ProgramData data, PathDisplay paths)
+    private static void WriteDivisions(Utf8JsonWriter w, ProgramUnit p, ProgramData data, ProcedureBindings bindings, PathDisplay paths)
     {
         w.WriteStartObject("divisions");
         if (p.Identification is { } id)
@@ -212,11 +212,92 @@ public static class SyntaxReport
             }
 
             w.WriteNumber("bodyTokens", proc.Body.TokenCount);
+            WriteSections(w, "declaratives", proc.Declaratives);
+            WriteSections(w, "sections", proc.Sections);
+            w.WriteStartObject("statements");
+            foreach (var g in proc.AllStatements().GroupBy(StatementName).OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                w.WriteNumber(g.Key, g.Count());
+            }
+
+            w.WriteEndObject();
+            WriteReferences(w, proc, bindings);
             w.WriteEndObject();
         }
 
         w.WriteEndObject();
     }
+
+    // How each name in the body resolved; unresolved names also appear as warnings.
+    private static void WriteReferences(Utf8JsonWriter w, ProcedureDivision proc, ProcedureBindings bindings)
+    {
+        w.WriteStartObject("references");
+        w.WriteNumber("data", proc.DataReferences.Count);
+        w.WriteNumber("dataItems", proc.DataReferences.Count(d => bindings.ItemOf(d) is not null));
+        foreach (var g in proc.DataReferences.Select(bindings.ImplicitKindOf).OfType<string>().GroupBy(k => k).OrderBy(g => g.Key, StringComparer.Ordinal))
+        {
+            w.WriteNumber(g.Key, g.Count());
+        }
+
+        w.WriteNumber("procedures", proc.ProcedureReferences.Count);
+        w.WriteNumber("proceduresResolved", proc.ProcedureReferences.Count(p => bindings.TargetOf(p) is not null));
+        w.WriteEndObject();
+    }
+
+    private static void WriteSections(Utf8JsonWriter w, string name, IReadOnlyList<ProcedureSection> sections)
+    {
+        if (sections.Count == 0)
+        {
+            return;
+        }
+
+        w.WriteStartArray(name);
+        foreach (var s in sections)
+        {
+            w.WriteStartObject();
+            if (s.Name is not null)
+            {
+                w.WriteString("name", s.Name);
+            }
+
+            w.WriteString("lines", $"{s.StartLine}-{s.EndLine}");
+            if (s.Use is not null)
+            {
+                w.WriteString("use", s.Use.Text);
+            }
+
+            if (s.Leading.Count > 0)
+            {
+                w.WriteNumber("leadingSentences", s.Leading.Count);
+            }
+
+            w.WriteStartArray("paragraphs");
+            foreach (var p in s.Paragraphs)
+            {
+                w.WriteStartObject();
+                w.WriteString("name", p.Name);
+                w.WriteString("lines", $"{p.StartLine}-{p.EndLine}");
+                w.WriteNumber("sentences", p.Sentences.Count);
+                w.WriteEndObject();
+            }
+
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
+    }
+
+    // MoveStatement -> MOVE; FileStatement and SortStatement report their verb.
+    private static string StatementName(Statement s) => s switch
+    {
+        FileStatement f => f.Verb,
+        SortStatement f => f.Verb,
+        ArithmeticStatement a => a.Verb.ToString().ToUpperInvariant(),
+        ExecStatementSyntax e => "EXEC " + e.Kind.ToString().ToUpperInvariant(),
+        ErrorStatement => "ERROR",
+        _ => s.GetType().Name[..^"Statement".Length].ToUpperInvariant(),
+    };
 
     private static void WriteSpecialNames(Utf8JsonWriter w, SpecialNamesParagraph? sn)
     {

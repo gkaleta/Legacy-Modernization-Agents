@@ -240,7 +240,7 @@ public sealed class SyntaxTests
         inner.Items.Single().Section.Should().Be(DataSectionKind.LocalStorage);
         r.Programs[2].Symbols.Resolve("SHARED").Status.Should().Be(Semantics.LookupStatus.NotFound);
         r.Diagnostics.Where(d => d.Severity != DiagnosticSeverity.Info).Should().BeEmpty();
-        r.Coverage.Count(CoverageClass.Lexed).Should().Be("CALL'INNER'.MOVESHAREDTOSHARED.GOBACK.".Length);
+        r.Coverage.Count(CoverageClass.Lexed).Should().Be(0);
     }
 
     [Fact]

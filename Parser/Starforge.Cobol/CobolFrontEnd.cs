@@ -30,8 +30,10 @@ public sealed class CompilationResult
         bool debuggingMode,
         bool decimalPointIsComma,
         CompilationUnitSyntax syntax,
-        IReadOnlyList<ProgramData> programs)
+        IReadOnlyList<ProgramData> programs,
+        IReadOnlyDictionary<int, Exec.ExecStatement> parsedExecs)
     {
+        ParsedExecs = parsedExecs;
         Syntax = syntax;
         Programs = programs;
         Program = program;
@@ -65,11 +67,16 @@ public sealed class CompilationResult
 
     public bool DebuggingMode { get; }
 
-    // IDENTIFICATION/ENVIRONMENT/DATA syntax; the PROCEDURE DIVISION body is an opaque token range until M3.
     public CompilationUnitSyntax Syntax { get; }
+
+    // EXEC blocks the procedure parser parsed, by token index; ExecPass reuses them instead of parsing twice.
+    public IReadOnlyDictionary<int, Exec.ExecStatement> ParsedExecs { get; }
 
     // Data layout per program, in Syntax.AllPrograms() order.
     public IReadOnlyList<ProgramData> Programs { get; }
+
+    // Procedure name bindings per program, aligned with Programs.
+    public IReadOnlyList<ProcedureBindings> Bindings { get; internal set; } = Array.Empty<ProcedureBindings>();
 
     public bool DecimalPointIsComma { get; }
 
@@ -82,7 +89,7 @@ public sealed class CompilationResult
 
     public CoverageReport RebuildCoverage() => Coverage = Accounting.BuildReport();
 
-    // Characters of the given class inside PROCEDURE DIVISION bodies; Lexed minus this is what M2 left unparsed.
+    // Characters of the given class inside PROCEDURE DIVISION bodies.
     public long CountInProcedureBodies(CoverageClass cls)
         => Syntax.AllPrograms()
             .Select(p => p.Procedure?.Body)
@@ -137,7 +144,9 @@ public sealed class CobolFrontEnd
         var programs = DataLayout.Compute(parse.Syntax, accounting.Units);
         diagnostics.AddRange(programs.SelectMany(p => p.Diagnostics));
 
-        return new CompilationResult(program, accounting.Units, inclusions, expanded, lex.Tokens, diagnostics, accounting, accounting.BuildReport(), debug, comma, parse.Syntax, programs);
+        var result = new CompilationResult(program, accounting.Units, inclusions, expanded, lex.Tokens, diagnostics, accounting, accounting.BuildReport(), debug, comma, parse.Syntax, programs, parse.ParsedExecs);
+        result.Bindings = ProcedureResolver.Resolve(result, diagnostics);
+        return result;
     }
 
     private static void MarkTokens(TokenStream tokens, TokenAccounting accounting)
