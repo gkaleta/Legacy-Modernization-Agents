@@ -32,6 +32,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Starforge.Cobol\Starforge.Cobol.csproj" />
     <ProjectReference Include="..\..\CobolToQuarkusMigration.csproj" />
+    <ProjectReference Include="..\Starforge.Cobol.Cli\Starforge.Cobol.Cli.csproj" />
+    <ProjectReference Include="..\Starforge.Cobol.ModelDiff\Starforge.Cobol.ModelDiff.csproj" />
   </ItemGroup>
 
 </Project>

@@ -8,7 +8,9 @@ internal static class Program
 {
     private const string Usage = "usage: starforge-model-diff --rekt <dir> --starforge <dir> --source <dir>... --out <dir> [--program <rel>]...";
 
-    public static async Task<int> Main(string[] args)
+    public static Task<int> Main(string[] args) => Run(args, Console.Out, Console.Error);
+
+    public static async Task<int> Run(string[] args, TextWriter stdout, TextWriter stderr)
     {
         string? rekt = null, starforge = null, outDir = null;
         var sources = new List<string>();
@@ -24,15 +26,15 @@ internal static class Program
                 case "--out": outDir = value; i++; break;
                 case "--program": only.Add(value ?? ""); i++; break;
                 default:
-                    Console.Error.WriteLine($"unknown argument: {args[i]}");
-                    Console.Error.WriteLine(Usage);
+                    stderr.WriteLine($"unknown argument: {args[i]}");
+                    stderr.WriteLine(Usage);
                     return 2;
             }
         }
 
         if (rekt is null || starforge is null || sources.Count == 0 || outDir is null)
         {
-            Console.Error.WriteLine(Usage);
+            stderr.WriteLine(Usage);
             return 2;
         }
 
@@ -48,7 +50,7 @@ internal static class Program
         {
             if (SourceRoot(sources, rel) is not { } root)
             {
-                Console.Error.WriteLine($"error: {rel} is not found under any --source");
+                stderr.WriteLine($"error: {rel} is not found under any --source");
                 return 2;
             }
 
@@ -108,10 +110,10 @@ internal static class Program
         report.WriteJson(Path.Combine(outDir, "model-diff.json"));
         File.WriteAllText(Path.Combine(outDir, "model-diff.md"), report.Markdown());
         report.WriteRows(Path.Combine(outDir, "model-diff-rows.tsv"));
-        Console.WriteLine($"programs={report.Programs} unexplained={report.Unexplained}");
+        stdout.WriteLine($"programs={report.Programs} unexplained={report.Unexplained}");
         foreach (var t in report.Tallies)
         {
-            Console.WriteLine($"{t.Category,-32} matched={t.Matched} onlyStarforge={t.OnlyStarforge} onlyRekt={t.OnlyRekt} mismatch={t.Mismatch}");
+            stdout.WriteLine($"{t.Category,-32} matched={t.Matched} onlyStarforge={t.OnlyStarforge} onlyRekt={t.OnlyRekt} mismatch={t.Mismatch}");
         }
 
         return report.Unexplained == 0 ? 0 : 1;

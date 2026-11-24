@@ -9,11 +9,14 @@ internal static class ModelDiffLauncher
     private const string ProjectPath = "Parser/Starforge.Cobol.ModelDiff/Starforge.Cobol.ModelDiff.csproj";
 
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
+        => Run(args, stdout, stderr, AppContext.BaseDirectory, Directory.GetCurrentDirectory());
+
+    internal static int Run(string[] args, TextWriter stdout, TextWriter stderr, params string[] searchFrom)
     {
-        var project = FindProject(AppContext.BaseDirectory) ?? FindProject(Directory.GetCurrentDirectory());
+        var project = searchFrom.Select(FindProject).FirstOrDefault(found => found is not null);
         if (project is null)
         {
-            stderr.WriteLine($"error: {ProjectPath} not found above {AppContext.BaseDirectory}; run it with dotnet run --project");
+            stderr.WriteLine($"error: {ProjectPath} not found above {searchFrom[0]}; run it with dotnet run --project");
             return 2;
         }
 

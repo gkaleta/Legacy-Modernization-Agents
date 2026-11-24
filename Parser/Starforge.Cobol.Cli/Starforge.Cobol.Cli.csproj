@@ -14,6 +14,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Starforge.Cobol.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Starforge.Cobol\Starforge.Cobol.csproj" />
   </ItemGroup>
 

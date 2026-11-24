@@ -12,6 +12,10 @@
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Starforge.Cobol.Contract.Tests" />
+  </ItemGroup>
+
   <!-- The comparison must go through the application's own readers, so it references the application. -->
   <ItemGroup>
     <ProjectReference Include="..\..\CobolToQuarkusMigration.csproj" />
