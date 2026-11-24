@@ -6,9 +6,11 @@ using Starforge.Cobol.Syntax;
 namespace Starforge.Cobol.Native;
 
 // Reaching definitions of one data item at one statement over the structured procedure: IF/EVALUATE branches join,
-// a PERFORM runs its paragraph range and returns, loops iterate to a fixpoint and paragraphs fall through. A write
-// the analysis cannot name (group move, INTO target, BY REFERENCE argument, ...) is an Unknown definition; GO TO,
-// ALTER, CICS HANDLE, SQL WHENEVER, declaratives or a recursive PERFORM fail the whole analysis instead of a guess.
+// a PERFORM runs its paragraph range and returns, loops iterate to a fixpoint and paragraphs fall through. GO TO and
+// EXIT PARAGRAPH/SECTION may only jump forward inside a running range, abandoning the PERFORMs nested in it, as long as
+// no other flow later falls into an abandoned range's end. A write the analysis cannot name (group move, INTO target,
+// BY REFERENCE argument, ...) is an Unknown definition; any other jump, ALTER, CICS HANDLE, SQL WHENEVER,
+// declaratives or a recursive PERFORM fail the whole analysis instead of a guess.
 internal sealed class ReachingDefinitions
 {
     public const int Initial = -1;
@@ -28,11 +30,29 @@ internal sealed class ReachingDefinitions
     private readonly List<Statement> _assignments = new();
     private readonly Dictionary<(int, int, string), int[]?> _memo = new();
     private readonly HashSet<(int, int)> _active = new();
+    private readonly Stack<Frame> _frames = new();
+    private readonly HashSet<(int First, int End)> _abandoned = new();
+    private readonly HashSet<(int Unit, int First, int End)> _visits = new();
     private readonly DataRef[] _references;
     private int[]? _reaching;
     private int _steps;
 
     public sealed class Unsupported(string reason) : Exception(reason);
+
+    // One running paragraph range; Pending[i] collects the states jumping to unit First + i (the last slot is End).
+    private sealed class Frame(int first, int end)
+    {
+        public int First { get; } = first;
+
+        public int End { get; } = end;
+
+        public int Unit { get; set; } = first;
+
+        public int[]?[] Pending { get; } = new int[]?[end - first + 1];
+
+        // A range some jump left early has a result that depends on its caller, so it is never memoised.
+        public bool Escaped { get; set; }
+    }
 
     private ReachingDefinitions(ProcedureDivision procedure, ProcedureBindings bindings, ProgramData data, TokenStream tokens, DataItem item, Statement at)
     {
@@ -65,6 +85,12 @@ internal sealed class ReachingDefinitions
         var analysis = new ReachingDefinitions(procedure, bindings, data, tokens, item, at);
         analysis.Check();
         analysis.Run(0, analysis._units.Count, [Initial]);
+        // An abandoned PERFORM leaves its return armed; flow falling into that range's end would take it.
+        if (analysis._abandoned.Any(a => analysis._visits.Any(v => v.Unit == a.End - 1 && (v.First, v.End) != a)))
+        {
+            throw new Unsupported("abandoned-perform-return");
+        }
+
         var reaching = analysis._reaching ?? throw new Unsupported("unreachable");
         var assignments = reaching.Where(d => d >= 0).Select(d => analysis._assignments[d]).OrderBy(s => s.Span.FirstToken).ToList();
         return (assignments, reaching.Contains(Initial), reaching.Contains(Unknown));
@@ -91,8 +117,8 @@ internal sealed class ReachingDefinitions
         {
             switch (statement)
             {
-                case GoToStatement or AlterStatement or NextSentenceStatement or EntryStatement or ErrorStatement:
-                case ExitStatement { Kind: not ("" or "PROGRAM") }:
+                case GoToStatement { Targets.Count: 0 } or AlterStatement or NextSentenceStatement or EntryStatement or ErrorStatement:
+                case ExitStatement { Kind: not ("" or "PROGRAM" or "PARAGRAPH" or "SECTION") }:
                 case ExecStatementSyntax { Parsed: CicsCommand { Verb: "HANDLE" or "PUSH" or "POP" } }:
                 case ExecStatementSyntax { Parsed: SqlStatement { StatementKind: SqlStatementKind.Whenever } }:
                     throw new Unsupported("flow:" + statement.GetType().Name);
@@ -115,14 +141,28 @@ internal sealed class ReachingDefinitions
             throw new Unsupported("recursive-perform");
         }
 
+        var frame = new Frame(first, end);
+        _frames.Push(frame);
         int[]? current = state;
-        for (var unit = first; unit < end && current is not null; unit++)
+        for (var unit = first; unit < end; unit++)
         {
-            current = Block(_units[unit].Body, current);
+            current = Join(current, frame.Pending[unit - first]);
+            if (current is not null)
+            {
+                frame.Unit = unit;
+                _visits.Add((unit, first, end));
+                current = Block(_units[unit].Body, current);
+            }
         }
 
+        current = Join(current, frame.Pending[end - first]);
+        _frames.Pop();
         _active.Remove((first, end));
-        _memo[key] = current;
+        if (!frame.Escaped)
+        {
+            _memo[key] = current;
+        }
+
         return current;
     }
 
@@ -187,6 +227,23 @@ internal sealed class ReachingDefinitions
                 return Perform(s, state);
             case GobackStatement or StopStatement { Literal: null } or ExitStatement { Kind: "PROGRAM" }:
                 return null;
+            case GoToStatement s:
+                foreach (var target in s.Targets)
+                {
+                    Jump(Unit(target).First, state);
+                }
+
+                // GO TO DEPENDING ON falls through when the index selects no target.
+                return s.DependingOn is null ? null : state;
+            case ExitStatement { Kind: "PARAGRAPH" }:
+                Jump(_frames.Peek().Unit + 1, state);
+                return null;
+            case ExitStatement { Kind: "SECTION" }:
+            {
+                var unit = _frames.Peek().Unit;
+                Jump(_sections.Single(x => x.First <= unit && unit < x.End).End, state);
+                return null;
+            }
             case ExecStatementSyntax { Parsed: CicsCommand cics } when Terminates(cics):
                 return null;
         }
@@ -249,6 +306,36 @@ internal sealed class ReachingDefinitions
 
             result = next;
         }
+    }
+
+    // A jump lands later inside the innermost running range that holds it, whose fall-through picks it up.
+    private void Jump(int target, int[] state)
+    {
+        var left = new List<Frame>();
+        foreach (var frame in _frames)
+        {
+            // Landing inside a range being left would really run on and return through that PERFORM.
+            if (frame.First <= target && target < frame.End && target <= frame.Unit)
+            {
+                break;
+            }
+
+            if (frame.Unit < target && target <= frame.End)
+            {
+                foreach (var inner in left)
+                {
+                    inner.Escaped = true;
+                    _abandoned.Add((inner.First, inner.End));
+                }
+
+                frame.Pending[target - frame.First] = Join(frame.Pending[target - frame.First], state);
+                return;
+            }
+
+            left.Add(frame);
+        }
+
+        throw new Unsupported("jump-outside-range:" + (target < _units.Count ? _units[target].Paragraph ?? _units[target].Section : "end"));
     }
 
     private (int First, int End) Range(ProcedureRef target, ProcedureRef? thru)
