@@ -354,6 +354,12 @@ internal sealed class ConstantResolver
         return value.Length == 0 ? null : value;
     }
 
+    public bool Untouched(DataItem item)
+    {
+        var (root, start, end) = Extent(item);
+        return !_touched.Any(t => ReferenceEquals(t.Root, root) && t.Start < end && start < t.End);
+    }
+
     private IReadOnlyList<DataItem> Lookup(string name, IReadOnlyList<string>? qualifiers)
         => _data.Symbols.Resolve(name, qualifiers).Candidates;
 

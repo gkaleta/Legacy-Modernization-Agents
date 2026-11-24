@@ -334,7 +334,11 @@ internal sealed partial class NativeCics
                 yield return Map(command, verb);
                 yield break;
             case "INQUIRE PROGRAM":
-                yield return ProgramTarget(command, "program-definition-inquiry");
+                foreach (var binding in ProgramTargets(command, "program-definition-inquiry"))
+                {
+                    yield return binding;
+                }
+
                 yield break;
             case "WRITEQ TD":
                 yield return Queue(command);
@@ -353,7 +357,11 @@ internal sealed partial class NativeCics
             case "XCTL" when command.Names.Any(n => n is "CHANNEL" or "INPUTMSG" or "INPUTMSGLEN"):
                 throw new Problem("xctl-option");
             case "XCTL":
-                yield return ProgramTarget(command, "transfer-control");
+                foreach (var binding in ProgramTargets(command, "transfer-control"))
+                {
+                    yield return binding;
+                }
+
                 break;
             case "RETURN" when command.Names.Contains("TRANSID"):
                 yield return Transaction(command);
@@ -744,22 +752,29 @@ internal sealed partial class NativeCics
         }
         else
         {
-            if (argument.Kind != ExecArgumentKind.DataRef || !NameR().IsMatch(argument.Text))
+            if (argument.Kind != ExecArgumentKind.DataRef)
             {
                 throw new Problem("operand:PROGRAM");
             }
 
-            var (value, item) = _data.Constant(command.Unit, argument.Text, callTargets: false, readOnly: null, readStatements: false)
-                ?? throw new Problem("not-constant:" + argument.Text);
-            var definition = _data.Entry(item) ?? throw new Problem("constant:" + argument.Text);
+            var constant = !NameR().IsMatch(argument.Text) ? null : _data.Constant(command.Unit, argument.Text, callTargets: false, readOnly: null, readStatements: false);
+            var definition = constant is { } c ? _data.Entry(c.Item) : null;
             var match = Regex.Match(
-                string.Concat(Words(definition)),
+                definition is null ? string.Empty : string.Concat(Words(definition)),
                 "^01" + Regex.Escape(argument.Text) + """PIC(?:TURE)?(?:IS)?X\(0*8\)VALUE(?:IS)?(['"])([A-Z0-9@$#_-]{1,8})( *)\1\.$""",
                 RegexOptions.IgnoreCase);
-            if (!match.Success || item.Section is not (DataSectionKind.WorkingStorage or DataSectionKind.LocalStorage)
+            if (constant is not var (value, item) || !match.Success || item.Section is not (DataSectionKind.WorkingStorage or DataSectionKind.LocalStorage)
                 || match.Groups[2].Length + match.Groups[3].Length > 8 || match.Groups[2].Value != value.TrimEnd(' '))
             {
-                throw new Problem("constant-shape:" + argument.Text);
+                // Otherwise the general proofs every gate operand rule accepts: a read-only constant or table entry.
+                var bindings = ProgramTargets(command, "call").ToList();
+                if (bindings.Count != 1)
+                {
+                    throw new Problem("link-targets:" + argument.Text);
+                }
+
+                command.Link = (string)bindings[0]["name"]!;
+                return bindings[0];
             }
 
             name = match.Groups[2].Value;
@@ -775,16 +790,6 @@ internal sealed partial class NativeCics
         var binding = Program(name.ToUpperInvariant());
         binding["targetResolution"] = proof;
         command.Link = name.ToUpperInvariant();
-        return binding;
-    }
-
-    // XCTL / INQUIRE PROGRAM with a literal or constant program name.
-    private JsonObject ProgramTarget(Command command, string effect)
-    {
-        var (name, proof) = Name(command, command.Single("PROGRAM"), 1, 8);
-        var binding = Program(name.ToUpperInvariant());
-        binding["targetResolution"] = proof;
-        binding["controlEffect"] = effect;
         return binding;
     }
 

@@ -142,6 +142,28 @@ internal sealed class NativeData
         return resolver.ValueOf(item) is { } value ? (value, item) : null;
     }
 
+    // True when no procedure statement or EXEC operand outside the given read-only positions can write the item.
+    public bool ReadOnly(ProgramUnit unit, DataItem item, Func<CicsCommand, ExecOption, bool> readOnly)
+    {
+        var index = _result.Syntax.AllPrograms().ToList().FindIndex(u => ReferenceEquals(u, unit));
+        if (index < 0 || index >= _result.Programs.Count || unit.Procedure is not { } procedure)
+        {
+            return false;
+        }
+
+        var statements = procedure.AllStatements().ToList();
+        var resolver = new ConstantResolver(
+            _result.Programs[index],
+            index < _result.Bindings.Count ? _result.Bindings[index] : ProcedureBindings.Empty,
+            procedure,
+            statements,
+            Execs(unit),
+            readOnly,
+            callTargetsRead: true,
+            NativeReads.Of(statements));
+        return resolver.Untouched(item);
+    }
+
     public ProcedureBindings BindingsOf(ProgramUnit unit)
     {
         var index = _result.Syntax.AllPrograms().ToList().FindIndex(u => ReferenceEquals(u, unit));

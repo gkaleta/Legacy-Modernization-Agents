@@ -139,7 +139,17 @@ internal sealed partial class NativeCics
         }
         catch (Problem) when (verb == "SEND" && option.Argument is { Kind: Exec.ExecArgumentKind.DataRef })
         {
-            var (values, proof) = Reaching(command, option, 1, 7);
+            List<string?> values;
+            JsonObject proof;
+            try
+            {
+                (values, proof) = Reaching(command, option, 1, 7);
+            }
+            catch (Problem) when (NameR().IsMatch(option.Argument.Text))
+            {
+                (values, proof) = FlowReaching(command, option, 1, 7);
+            }
+
             return values.Count == 1 && values[0] is { Length: > 0 } single ? (single, proof) : throw new Problem("map-reaching:" + option.Argument.Text);
         }
     }
@@ -150,25 +160,7 @@ internal sealed partial class NativeCics
     {
         var operand = option.Argument!.Text;
         var unit = command.Unit;
-        var item = _data.DataOf(unit)?.Symbols.Resolve(operand).Item ?? throw new Problem("reaching-name:" + operand);
-        if (item.Section is not (DataSectionKind.WorkingStorage or DataSectionKind.LocalStorage) || item.External || item.Record.External)
-        {
-            throw new Problem("reaching-section:" + operand);
-        }
-
-        var definition = _data.Entry(item) ?? throw new Problem("reaching-definition:" + operand);
-        var shape = Regex.Match(
-            string.Concat(Words(definition)),
-            "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(operand) + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]{0,3})\)(?:VALUE(?:IS)?(['"])([^'"]*)\3)?\.$""",
-            RegexOptions.IgnoreCase);
-        var ancestors = item.Ancestors().Reverse().Select(_data.Entry).ToList();
-        var levels = item.Ancestors().Reverse().Select(a => a.Level).Append(item.Level).ToList();
-        if (!shape.Success || ancestors.Any(a => a is null || !Regex.IsMatch(string.Concat(Words(a)), @"^(0?[1-9]|[1-4][0-9])[A-Za-z][A-Za-z0-9-]*\.$"))
-            || levels.Count > 1 && (levels[0] != 1 || levels.Zip(levels.Skip(1)).Any(p => p.First >= p.Second)))
-        {
-            throw new Problem("reaching-shape:" + operand);
-        }
-
+        var (item, definition, ancestors, shape) = ReachingItem(command, operand);
         var length = int.Parse(shape.Groups[2].Value);
         var bindings = _data.BindingsOf(unit);
         var statements = Paragraph(unit, command.Exec) ?? throw new Problem("reaching-flow:" + operand);
