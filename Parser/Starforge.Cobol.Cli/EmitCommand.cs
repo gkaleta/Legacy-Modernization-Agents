@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using Starforge.Cobol.Deps;
 using Starforge.Cobol.Emit;
 
 namespace Starforge.Cobol.Cli;
@@ -36,6 +37,7 @@ internal static class EmitCommand
             .ToList();
 
         var frontEnd = new CobolFrontEnd(new FrontEndOptions(roots));
+        var options = roots.ToDictionary(r => r, EstateOptions, StringComparer.Ordinal);
         var failures = new ConcurrentBag<(string Program, string Error)>();
         var counts = new ConcurrentBag<int>();
         var clock = Stopwatch.StartNew();
@@ -44,7 +46,8 @@ internal static class EmitCommand
             var rel = display.Show(path);
             try
             {
-                var files = RektEmitter.Render(frontEnd.Process(path), rel, display);
+                var root = roots.First(r => path.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+                var files = RektEmitter.Render(frontEnd.Process(path), rel, options[root]);
                 foreach (var file in files)
                 {
                     var target = Path.Combine(outDir, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -70,5 +73,12 @@ internal static class EmitCommand
         }
 
         return failures.IsEmpty ? 0 : 1;
+    }
+
+    // Each estate carries its own CICS resource definitions and platform-contracts snapshot.
+    internal static RektEmitOptions EstateOptions(string root)
+    {
+        var contracts = Path.Combine(root, ".preprocessed", "platform-contracts.json");
+        return new RektEmitOptions(CicsDefinitions.Discover(root), File.Exists(contracts) ? contracts : null);
     }
 }

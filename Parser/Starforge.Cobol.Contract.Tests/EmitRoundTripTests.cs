@@ -48,7 +48,7 @@ public sealed class EmitRoundTripTests : IDisposable
 
         var rekt = Path.Combine(_repo, "rekt");
         var result = new CobolFrontEnd(new FrontEndOptions(new[] { estate })).Process(program);
-        foreach (var file in RektEmitter.Render(result, "est/cobol/MAIN.cbl", new PathDisplay(new[] { (estate, "est") })))
+        foreach (var file in RektEmitter.Render(result, "est/cobol/MAIN.cbl"))
         {
             var target = Path.Combine(rekt, file.RelativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);

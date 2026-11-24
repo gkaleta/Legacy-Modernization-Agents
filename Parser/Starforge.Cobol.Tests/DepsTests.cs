@@ -83,4 +83,81 @@ public class DepsTests
             ("CPYA.cpy", "CPYA", DependencyKind.Copy, CopyStatus.Resolved, 5),
             ("NOSUCH.cpy", "NOSUCH", DependencyKind.Copy, CopyStatus.Missing, 6));
     }
+
+    private static string[] RunLoop(params string[] write) => new[]
+    {
+        A("IDENTIFICATION DIVISION."),
+        A("PROGRAM-ID. MAIN."),
+        A("DATA DIVISION."),
+        A("WORKING-STORAGE SECTION."),
+        A("01  WS-TRAN PIC X(4)."),
+        A("01  WS-I PIC 9 VALUE 0."),
+        A("PROCEDURE DIVISION."),
+        B("PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 3"),
+    }.Concat(write).Concat(new[]
+    {
+        B("    EXEC CICS RUN TRANSID(WS-TRAN) END-EXEC"),
+        B("END-PERFORM."),
+        B("GOBACK."),
+    }).ToArray();
+
+    private static CicsDefinitions Definitions(TestEstate estate)
+    {
+        estate.Write("cics/defs.yaml",
+            "resourceDefinitions:",
+            "  - transaction:",
+            "      name: OCR1",
+            "      program: AGENCY1",
+            "  - transaction:",
+            "      name: OCR2",
+            "      group: G",
+            "      program: AGENCY2",
+            "  - program:",
+            "      name: AGENCY3");
+        estate.Write("cics/defs.csd",
+            "DEFINE TRANSACTION(OCR3) GROUP(G)",
+            "       PROGRAM(AGENCY3) DESCRIPTION(THIRD)",
+            "DEFINE PROGRAM(AGENCY3) GROUP(G)",
+            "DEFINE TRANSACTION(OCR2) GROUP(H) PROGRAM(OTHER)");
+        return CicsDefinitions.Discover(estate.Root);
+    }
+
+    [Fact]
+    public void CicsDefinitionsReadCsdAndYamlAndNeverResolveAConflictingTransaction()
+    {
+        using var estate = new TestEstate();
+        var cics = Definitions(estate);
+
+        cics.Count.Should().Be(3);
+        cics.Transaction("OCR1").Should().Be(new CicsDefinitions.Binding("AGENCY1", Path.Combine(estate.Root, "cics", "defs.yaml")));
+        cics.Transaction("OCR3").Should().Be(new CicsDefinitions.Binding("AGENCY3", Path.Combine(estate.Root, "cics", "defs.csd")));
+        cics.Transaction("OCR2").Should().BeNull();
+    }
+
+    [Fact]
+    public void RunTransidFromABoundedStringLoopResolvesEachTransactionThroughTheDefinitions()
+    {
+        using var estate = new TestEstate();
+        var cics = Definitions(estate);
+        var result = estate.Program(RunLoop(
+            B("    STRING 'OCR' DELIMITED BY SIZE WS-I DELIMITED BY SIZE"),
+            B("        INTO WS-TRAN")));
+
+        DependencyExtractor.Extract(result, cics).Programs.Should().Equal(
+            new ProgramReference(DependencyKind.CicsRun, "AGENCY1", true, "WS-TRAN", 11),
+            new ProgramReference(DependencyKind.CicsRun, "AGENCY3", true, "WS-TRAN", 11));
+    }
+
+    [Fact]
+    public void RunTransidStaysUnresolvedWhenAnotherStatementAlsoWritesTheOperand()
+    {
+        using var estate = new TestEstate();
+        var cics = Definitions(estate);
+        var result = estate.Program(RunLoop(
+            B("    STRING 'OCR' DELIMITED BY SIZE WS-I DELIMITED BY SIZE"),
+            B("        INTO WS-TRAN"),
+            B("    MOVE 'OCR1' TO WS-TRAN")));
+
+        DependencyExtractor.Extract(result, cics).Programs.Should().BeEmpty();
+    }
 }

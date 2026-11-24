@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Starforge.Cobol.Deps;
 using Starforge.Cobol.Flow;
 using Starforge.Cobol.Semantics;
@@ -18,22 +19,28 @@ public sealed record EmittedFile(string RelativePath, Action<Stream> WriteTo)
     }
 }
 
+// Cics resolves data-name RUN TRANSIDs; PlatformContracts overrides the platform-contracts.json a platform copy names.
+public sealed record RektEmitOptions(CicsDefinitions? Cics = null, string? PlatformContracts = null);
+
 // Writes the files downstream readers load from a REKT report tree, in the same layout and JSON vocabulary:
 // <rel>-deps.json and <rel>.report/{flow_ast,cfg,data_structures}/..., plus parse-diagnostics.json when copybooks are missing.
 public static class RektEmitter
 {
-    public static IReadOnlyList<EmittedFile> Render(CompilationResult result, string relativePath, PathDisplay paths)
+    public static IReadOnlyList<EmittedFile> Render(CompilationResult result, string relativePath, RektEmitOptions? options = null)
     {
+        options ??= new RektEmitOptions();
         var basename = Path.GetFileName(relativePath);
         var report = relativePath + ".report/";
         var program = result.Syntax.AllPrograms().FirstOrDefault();
         var data = result.Programs.Count > 0 ? result.Programs[0] : null;
         var flow = program?.Procedure is { } procedure ? FlowBuilder.Build(procedure, result.Tokens) : null;
-        var deps = DependencyExtractor.Extract(result);
+        var deps = DependencyExtractor.Extract(result, options.Cics);
+        var platform = deps.Copybooks.Where(c => c.Kind == DependencyKind.PlatformCopy && c.ResolvedPath is not null)
+            .Select(c => Path.GetFullPath(c.ResolvedPath!)).ToHashSet(StringComparer.Ordinal);
 
         var files = new List<EmittedFile>
         {
-            new(relativePath + "-deps.json", Json(w => WriteDeps(w, result, deps, basename, relativePath, paths))),
+            new(relativePath + "-deps.json", Json(w => WriteDeps(w, result, deps, basename, options))),
         };
         if (flow is not null)
         {
@@ -41,7 +48,7 @@ public static class RektEmitter
             files.Add(new(report + "cfg/cfg-" + basename + ".json", Json(w => WriteCfg(w, flow))));
         }
 
-        files.Add(new(report + "data_structures/" + basename + "-data.json", Json(w => WriteData(w, result, data))));
+        files.Add(new(report + "data_structures/" + basename + "-data.json", Json(w => WriteData(w, result, data, platform))));
         var missing = deps.MissingCopybooks.Select(c => c.Member).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (missing.Count > 0)
         {
@@ -216,7 +223,8 @@ public static class RektEmitter
         w.WriteEndObject();
     }
 
-    private static void WriteData(Utf8JsonWriter w, CompilationResult result, ProgramData? data)
+    // Platform projections are symbolic stand-ins, not program storage, so their records are left out.
+    private static void WriteData(Utf8JsonWriter w, CompilationResult result, ProgramData? data, HashSet<string> platform)
     {
         var id = 0;
         w.WriteStartObject();
@@ -234,7 +242,8 @@ public static class RektEmitter
         w.WriteEndArray();
         w.WriteString("sourceSection", "ROOT");
         w.WriteStartArray("children");
-        foreach (var record in data?.Records ?? Array.Empty<DataItem>())
+        foreach (var record in (data?.Records ?? Array.Empty<DataItem>())
+                     .Where(r => r.Entry.Unit <= 0 || r.Entry.Unit >= result.Units.Count || !platform.Contains(Path.GetFullPath(result.Units[r.Entry.Unit].Path))))
         {
             WriteItem(w, result, record, ref id);
         }
@@ -301,16 +310,16 @@ public static class RektEmitter
         w.WriteEndObject();
     }
 
-    private static void WriteDeps(Utf8JsonWriter w, CompilationResult result, ProgramDependencies deps, string basename, string relativePath, PathDisplay paths)
+    private static void WriteDeps(Utf8JsonWriter w, CompilationResult result, ProgramDependencies deps, string basename, RektEmitOptions options)
     {
         w.WriteStartObject();
         WriteTarget(w, basename, true);
         w.WriteNumber("dependencyExportSchemaVersion", 1);
         w.WriteString("dependencyProducer", "starforge");
         w.WriteString("dependencyKind", "PROGRAM");
-        // Strict-gate evidence (coverage, runtime contracts) is not produced yet, so the export never claims completeness.
+        // The native coverage contract (dialect statements, presence/absence proofs) is not produced yet, so the export never claims completeness.
         w.WriteBoolean("dependencyAnalysisComplete", false);
-        w.WriteString("sourcePath", relativePath);
+        w.WriteString("sourcePath", Path.GetFullPath(result.Program.Path));
         w.WriteString("sourceSha256", Sha256(result.Program.Path));
         w.WriteStartArray("dependencies");
         var seen = new HashSet<(string, string, bool)>();
@@ -322,22 +331,32 @@ public static class RektEmitter
                 w.WriteStartObject();
                 WriteTarget(w, c.Name, true);
                 w.WriteString("dependencyKind", kind);
-                w.WriteString("copyStatus", c.Status.ToString());
-                if (c.ResolvedPath is { } resolved)
+                if (c.Kind == DependencyKind.PlatformCopy)
                 {
-                    w.WriteString("sourcePath", paths.Show(resolved));
+                    WritePlatformContract(w, result, c, options);
+                }
+                else
+                {
+                    w.WriteString("copyStatus", c.Status.ToString());
+                    if (c.ResolvedPath is { } resolved)
+                    {
+                        // The gate re-reads and re-hashes each resolved input, which needs the host path, not a display path.
+                        w.WriteString("sourcePath", Path.GetFullPath(resolved));
+                        w.WriteString("sourceSha256", Sha256(resolved));
+                    }
                 }
 
                 w.WriteEndObject();
             }
         }
 
-        foreach (var p in deps.Programs)
+        // The dependency contract has no XCTL node kind (the gate rejects one); XCTL stays a control transfer in the inventory.
+        foreach (var p in deps.Programs.Where(p => p.Kind != DependencyKind.CicsXctl))
         {
             var kind = p.Kind switch
             {
                 DependencyKind.CicsLink => "CICS_LINK",
-                DependencyKind.CicsXctl => "CICS_XCTL",
+                DependencyKind.CicsRun => "CICS_RUN",
                 _ => "CALL",
             };
             if (seen.Add((kind, p.Name.ToUpperInvariant(), p.IsStatic)))
@@ -417,6 +436,42 @@ public static class RektEmitter
         w.WriteEndArray();
         w.WriteEndObject();
         w.WriteEndObject();
+    }
+
+    // A platform copy has no body of its own: its children are empty and its meaning is the runtime contract.
+    private static void WritePlatformContract(Utf8JsonWriter w, CompilationResult result, CopybookReference copy, RektEmitOptions options)
+    {
+        w.WriteBoolean("dependencyAnalysisComplete", false);
+        w.WriteStartArray("dependencies");
+        w.WriteEndArray();
+        string? failure = "platform projection not found";
+        var contract = copy.ResolvedPath is { } projection
+            ? PlatformContract.Bind(result, copy.Name, projection, options.PlatformContracts ?? ContractsOf(projection), out failure)
+            : null;
+        w.WriteBoolean("runtimeContractBindingComplete", contract is not null);
+        if (contract is not null)
+        {
+            w.WritePropertyName("runtimeContract");
+            contract.WriteTo(w);
+        }
+        else
+        {
+            w.WriteStartArray("dependencyDiagnostics");
+            w.WriteStringValue($"starforge: {copy.Name.ToUpperInvariant()} symbolic replacement not bound: {failure}");
+            w.WriteEndArray();
+        }
+    }
+
+    private static string? ContractsOf(string projection)
+    {
+        var sidecar = projection + ".preprocess.json";
+        if (!File.Exists(sidecar))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(File.ReadAllBytes(sidecar));
+        return document.RootElement.TryGetProperty("originalSourcePath", out var original) ? original.GetString() : null;
     }
 
     private static void WriteTarget(Utf8JsonWriter w, string name, bool isStatic)

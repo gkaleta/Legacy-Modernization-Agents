@@ -9,10 +9,11 @@ namespace Starforge.Cobol.Deps;
 
 public static class DependencyExtractor
 {
-    public static ProgramDependencies Extract(CompilationResult result)
+    public static ProgramDependencies Extract(CompilationResult result, CicsDefinitions? cics = null)
     {
         var tokens = result.Tokens;
-        var execs = ExecStatements(result);
+        var execTokens = ExecTokens(result);
+        var execs = execTokens.Select(e => (e.Statement, e.Line)).ToList();
         var programs = result.Syntax.AllPrograms().ToList();
         var calls = new List<ProgramReference>();
         var transfers = new List<ControlTransfer>();
@@ -28,6 +29,8 @@ public static class DependencyExtractor
         };
 
         var constants = new List<ConstantResolver>();
+        IReadOnlyList<Statement> mainStatements = Array.Empty<Statement>();
+        var mainBindings = ProcedureBindings.Empty;
         for (var p = 0; p < programs.Count; p++)
         {
             if (p >= result.Programs.Count || programs[p].Procedure is not { } procedure)
@@ -39,6 +42,12 @@ public static class DependencyExtractor
             var statements = procedure.AllStatements().ToList();
             var resolver = new ConstantResolver(result.Programs[p], bindings, procedure, statements, execs.Select(e => e.Statement));
             constants.Add(resolver);
+            if (constants.Count == 1)
+            {
+                mainStatements = statements;
+                mainBindings = bindings;
+            }
+
             foreach (var s in statements)
             {
                 var line = tokens.ProgramLine(s.Span.FirstToken);
@@ -85,13 +94,25 @@ public static class DependencyExtractor
             }
         }
 
-        foreach (var (exec, line) in execs)
+        foreach (var (exec, line, token) in execTokens)
         {
             var resolver = constants.Count > 0 ? constants[0] : null;
             switch (exec)
             {
-                case CicsCommand cics:
-                    AddCics(cics, line, resolver, calls, transfers, resources);
+                case CicsCommand command:
+                    AddCics(command, line, resolver, calls, transfers, resources);
+                    if (cics is not null && command.Verb == "RUN TRANSID"
+                        && command.Resources.FirstOrDefault(r => r.Kind == ExecResourceKind.TransId) is { Target: { IsStatic: false, DataName: { } operand } })
+                    {
+                        foreach (var transaction in TransactionValues.BoundedVaryingString(mainStatements, mainBindings, result.Programs[0], token, operand) ?? [])
+                        {
+                            if (cics.Transaction(transaction) is { } binding)
+                            {
+                                calls.Add(new ProgramReference(DependencyKind.CicsRun, binding.Program, true, operand, line));
+                            }
+                        }
+                    }
+
                     break;
                 case SqlStatement sql:
                     foreach (var t in sql.Tables)
@@ -223,9 +244,12 @@ public static class DependencyExtractor
     }
 
     public static IReadOnlyList<(Exec.ExecStatement Statement, int Line)> ExecStatements(CompilationResult result)
+        => ExecTokens(result).Select(e => (e.Statement, e.Line)).ToList();
+
+    private static List<(Exec.ExecStatement Statement, int Line, int Token)> ExecTokens(CompilationResult result)
     {
         var tokens = result.Tokens;
-        var list = new List<(Exec.ExecStatement, int)>();
+        var list = new List<(Exec.ExecStatement, int, int)>();
         for (var i = 0; i < tokens.Count; i++)
         {
             if (tokens[i].Kind != TokenKind.ExecBlock)
@@ -234,7 +258,7 @@ public static class DependencyExtractor
             }
 
             var statement = result.ParsedExecs.TryGetValue(i, out var parsed) ? parsed : ExecParser.Parse(tokens, i);
-            list.Add((statement, tokens.ProgramLine(i)));
+            list.Add((statement, tokens.ProgramLine(i), i));
         }
 
         return list;

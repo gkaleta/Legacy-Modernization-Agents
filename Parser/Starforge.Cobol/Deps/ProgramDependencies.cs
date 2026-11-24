@@ -9,6 +9,7 @@ public enum DependencyKind
     Call,
     CicsLink,
     CicsXctl,
+    CicsRun,
 }
 
 // Name is the copybook file stem plus a lower-case ".cpy" whatever the extension on disk; platform copybooks use the bare member.
