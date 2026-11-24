@@ -1,0 +1,125 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
+using Starforge.Cobol.Lexing;
+
+namespace Starforge.Cobol.Native;
+
+// Renders Starforge syntax as the native dependency contract's trees: {"token": text} leaves and
+// {"node": kind, "children": [...]} nodes. Roots also carry the original source range and the SHA-256 of
+// the exact source text the range covers, so the gate can re-read the file and check both.
+public static class NativeSyntax
+{
+    public static JsonObject Token(string text) => new() { ["token"] = text };
+
+    public static JsonObject Node(string kind, IEnumerable<JsonNode> children)
+    {
+        var array = new JsonArray();
+        foreach (var child in children)
+        {
+            array.Add(child);
+        }
+
+        return new JsonObject { ["node"] = kind, ["children"] = array };
+    }
+
+    // Lines split on '\n' with a trailing '\r' dropped; columns are 1-based and the end column is inclusive.
+    public static string? Slice(string text, int startLine, int startColumn, int endLine, int endColumn)
+    {
+        var lines = text.Split('\n');
+        if (startLine < 1 || endLine < startLine || endLine > lines.Length || startColumn < 1 || endColumn < 1)
+        {
+            return null;
+        }
+
+        string Line(int number) => lines[number - 1].EndsWith('\r') ? lines[number - 1][..^1] : lines[number - 1];
+        var first = Line(startLine);
+        var last = Line(endLine);
+        if (startColumn > first.Length || endColumn > last.Length || (startLine == endLine && endColumn < startColumn))
+        {
+            return null;
+        }
+
+        if (startLine == endLine)
+        {
+            return first.Substring(startColumn - 1, endColumn - startColumn + 1);
+        }
+
+        var builder = new StringBuilder(first[(startColumn - 1)..]);
+        for (var line = startLine + 1; line < endLine; line++)
+        {
+            builder.Append('\n').Append(Line(line));
+        }
+
+        return builder.Append('\n').Append(last[..endColumn]).ToString();
+    }
+
+    public static string Sha256(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.Latin1.GetBytes(text))).ToLowerInvariant();
+
+    public static string FileSha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+}
+
+// Turns token or expanded-text ranges of one compilation into rooted syntax trees.
+internal sealed class SyntaxRoots
+{
+    private readonly CompilationResult _result;
+    private readonly Dictionary<string, string?> _files = new(StringComparer.Ordinal);
+
+    public SyntaxRoots(CompilationResult result) => _result = result;
+
+    public List<string> Problems { get; } = new();
+
+    public TokenStream Tokens => _result.Tokens;
+
+    // A root over [start, end) of the expanded text; it must come from one original file and no REPLACING text.
+    public JsonObject Root(JsonObject node, int start, int end, string what)
+    {
+        var origin = _result.Expanded.OriginOf(start, end);
+        var startOrigin = _result.Expanded.OriginOf(start, start + 1);
+        var endOrigin = _result.Expanded.OriginOf(Math.Max(start, end - 1), Math.Max(start, end - 1) + 1);
+        var range = origin.Range;
+        var text = Read(range.File);
+        var slice = text is null ? null : NativeSyntax.Slice(text, range.StartLine, range.StartColumn, range.EndLine, range.EndColumn);
+        if (origin.FromReplacement || startOrigin.Unit != endOrigin.Unit || slice is null)
+        {
+            Problems.Add($"syntax-range-unavailable:{what}");
+        }
+
+        node["range"] = new JsonObject
+        {
+            ["path"] = Path.GetFullPath(range.File),
+            ["start"] = new JsonArray(range.StartLine, range.StartColumn),
+            ["end"] = new JsonArray(range.EndLine, range.EndColumn),
+        };
+        node["textSha256"] = NativeSyntax.Sha256(slice ?? string.Empty);
+        return node;
+    }
+
+    public JsonObject RootTokens(JsonObject node, int firstToken, int endToken, string what)
+    {
+        var tokens = _result.Tokens;
+        return Root(node, tokens[firstToken].Start, tokens[endToken - 1].End, what);
+    }
+
+    public (int Line, int Column) Position(int expandedOffset)
+    {
+        var range = _result.Expanded.OriginOf(expandedOffset, expandedOffset + 1).Range;
+        return (range.StartLine, range.StartColumn);
+    }
+
+    private string? Read(string path)
+    {
+        if (!_files.TryGetValue(path, out var text))
+        {
+            text = File.Exists(path) ? File.ReadAllText(path, Encoding.Latin1) : null;
+            _files[path] = text;
+        }
+
+        return text;
+    }
+}

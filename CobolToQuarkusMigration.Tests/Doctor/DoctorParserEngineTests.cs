@@ -68,6 +68,8 @@ public sealed class DoctorParserEngineTests : IDisposable
         var evidence = JsonNode.Parse(File.ReadAllText(Path.Join(report, "dependency-evidence.json")))!;
         evidence["relativePath"]!.GetValue<string>().Should().Be("estate/PROG.cbl");
         evidence["exportExitCode"]!.GetValue<int>().Should().Be(0);
+        evidence["unresolvedDiagnostics"]!.AsArray().Should().BeEmpty();
+        evidence["coverage"]!.AsObject().Select(pair => pair.Value!.GetValue<string>()).Distinct().Should().Equal("complete");
         File.Exists(Path.Join(RektOutput, "estate/SUBPROG.cbl-deps.json")).Should().BeFalse("the filter selected PROG only");
         File.ReadAllText(Path.Join(RektOutput, ".work/parser-engine")).Should().Be("starforge\n");
         Directory.GetDirectories(Path.Join(RektOutput, ".work"), "starforge-*").Should().BeEmpty();

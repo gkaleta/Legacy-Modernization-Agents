@@ -115,6 +115,8 @@ public static partial class RektEvidence
                     throw PyError.Value($"unknown-native-producer:{NativeProducer.Declared(exportDocument)}");
                 if (declared != engine) throw PyError.Value($"native-producer-mismatch:{declared}!={engine}");
                 (copies, calls) = ExportedNames(exportDocument, Path.GetFileName(source));
+                if (engine == NativeProducer.Starforge)
+                    StarforgeSyntaxRoots(exportDocument, PyCompat.Resolve(parserSourceRoot ?? sourceRoot), errors);
                 exportValid = true;
                 coverage["COPY"] = "partial";
                 coverage["CALL"] = "partial";

@@ -3409,12 +3409,26 @@ starforge_place_report() {
     [[ ! -d "$from.report" ]] || cp -R "$from.report" "$to.report" || return 1
 }
 
-# Same evidence step as export_rekt_dependencies, bound to source/ because Starforge parsed it in place.
-starforge_write_evidence() {
-    local rel_program="$1" export_status="$2"
-    local estate dependency_profile
+# The Starforge counterpart of export_rekt_dependencies: the same search view, staging and
+# contracts, but the native export comes from Starforge's own parse (host paths, no container).
+starforge_export_dependencies() {
+    local rel_program="$1" err_log="$2"
+    local export_status=0 estate dependency_profile
     estate="$(rekt_estate_of "$rel_program")"
+    local estate_staging="$REPO_ROOT/source/.rekt-staging/$estate"
+    local -a profile_args=()
     dependency_profile="$(rekt_dependency_profile_for "$estate")"
+    [[ -z "$dependency_profile" ]] || profile_args=(--profile "$dependency_profile")
+    if lma_cli rekt-evidence dependency-search-view \
+        --staging-root "$estate_staging" --relative-path "$rel_program" 2>>"$err_log"; then
+        [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies (Starforge): $rel_program"
+        starforge_cli native-export \
+            --program "$estate_staging/.dependency-input/$rel_program/$(basename "$rel_program")" \
+            --copybooks "$estate_staging" "${profile_args[@]}" \
+            --out "$REPO_ROOT/output/rekt/${rel_program}-deps.json" 2>>"$err_log" || export_status=$?
+    else
+        export_status=24
+    fi
     (
         if [[ "${REKT_PLATFORM_CONTRACTS+x}" == x ]]; then
             export REKT_PLATFORM_CONTRACTS="$(rekt_platform_contracts_for "$estate" host)"
@@ -3424,7 +3438,8 @@ starforge_write_evidence() {
         fi
         lma_cli_run "$_LMA_CLI_ASSEMBLY" rekt-evidence write \
             --source-root "$REPO_ROOT/source" --relative-path "$rel_program" \
-            --parser-source-root "$REPO_ROOT/source" --output-root "$REPO_ROOT/output/rekt" \
+            --staging-root "$estate_staging" --parser-source-root "$REPO_ROOT/source" \
+            --output-root "$REPO_ROOT/output/rekt" --engine starforge \
             --export-exit-code "$export_status"
     ) || return 1
     return "$export_status"
@@ -4125,9 +4140,7 @@ run_rekt_parse_impl() {
         # including recovered/raw/failed parses, and preserve the exporter diagnostics.
         local dep_ok=false
         if [[ "$PARSER_ENGINE" == starforge ]]; then
-            local starforge_export=0
-            [[ -f "$REPO_ROOT/output/rekt/${rel_program}-deps.json" ]] || starforge_export=1
-            starforge_write_evidence "$rel_program" "$starforge_export" && dep_ok=true
+            starforge_export_dependencies "$rel_program" "$err_log" && dep_ok=true
         elif export_rekt_dependencies "$rel_program" "$err_log" "/output/$report_work_rel"; then
             dep_ok=true
         fi
