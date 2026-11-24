@@ -25,6 +25,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CobolToQuarkusMigration.csproj" />
+    <!-- The doctor tests run PARSER_ENGINE=starforge against the parser built beside them. -->
+    <ProjectReference Include="..\Parser\Starforge.Cobol.Cli\Starforge.Cobol.Cli.csproj" />
   </ItemGroup>
 
 </Project>

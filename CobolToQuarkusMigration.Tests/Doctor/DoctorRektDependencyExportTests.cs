@@ -269,6 +269,27 @@ public sealed class DoctorRektDependencyExportTests : IDisposable
         Directory.Exists(Path.Join(Source, "other/.preprocessed")).Should().BeFalse();
     }
 
+    [Fact]
+    public void Doctor_BothEngines_KeepRektOutputAndCompareAgainstStarforge()
+    {
+        var starforge = Path.Join(AppContext.BaseDirectory, "starforge.dll");
+        _doctor.Env["PARSER_ENGINE"] = "both";
+        _doctor.Env["STARFORGE_CLI_ASSEMBLY"] = starforge;
+        _doctor.Env["STARFORGE_TEST_DLL"] = starforge;
+
+        var (current, _) = RunDoctor(structuralSuccess: true, otherEstate: false);
+
+        _lastStdOut.Should().Contain("Parser engine: both (PARSER_ENGINE)");
+        current["exportExitCode"]!.GetValue<int>().Should().Be(0);
+        File.ReadAllText(Path.Join(RektOutput, Relative + "-deps.json")).Should().NotContain("\"starforge\"");
+        var starforgeExport = JsonNode.Parse(File.ReadAllText(Path.Join(Root, "output/starforge", Relative + "-deps.json")))!;
+        starforgeExport["dependencyProducer"]!.GetValue<string>().Should().Be("starforge");
+        var diff = _doctor.Calls("dotnet").Should().ContainSingle(call => call.Contains("diff-rekt")).Which;
+        diff.SkipWhile(arg => arg != "--rekt").Skip(1).First().Should().Be(RektOutput);
+        diff.SkipWhile(arg => arg != "--starforge").Skip(1).First().Should().Be(Path.Join(Root, "output", "starforge"));
+        _lastStdOut.Should().Contain("Starforge comparison failed; REKT output is unaffected.");
+    }
+
     private (JsonNode Current, List<IReadOnlyList<string>> Calls) RunDoctor(bool structuralSuccess,
         bool exportSuccess = true, bool native = false, string? duplicateCallee = null, string? cicsDefinitions = null,
         string? factsCli = null, bool otherEstate = true, string expectedEstate = "estate", bool verbose = false)

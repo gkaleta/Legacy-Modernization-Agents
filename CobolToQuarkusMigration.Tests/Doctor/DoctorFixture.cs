@@ -28,12 +28,13 @@ public sealed class DoctorFixture : IDisposable
     private static readonly string[] ScrubbedPrefixes =
     [
         "JCL_", "COBOL_", "_REKT_", "NEO4J_", "REKT_", "ApplicationSettings__", "MIGRATION_",
-        "AZURE_OPENAI_", "AISETTINGS__", "COPILOT_", "OPENAI_",
+        "AZURE_OPENAI_", "AISETTINGS__", "COPILOT_", "OPENAI_", "STARFORGE_", "_STARFORGE_",
     ];
 
     private static readonly string[] ScrubbedNames =
     [
         "PROGRAM_SELECTION", "TARGET_LANGUAGE", "JAVA_OUTPUT_FOLDER", "CSHARP_OUTPUT_FOLDER", "GITHUB_TOKEN", "GH_TOKEN",
+        "PARSER_ENGINE",
     ];
 
     private static readonly TimeSpan RunTimeout = TimeSpan.FromSeconds(90);
@@ -329,7 +330,11 @@ public sealed class DoctorFixture : IDisposable
                     "$(json_value "${CONVERSION_DEPENDENCY_MODE+set}" "${CONVERSION_DEPENDENCY_MODE-}")" \
                     "$(json_value "${TARGET_LANGUAGE+set}" "${TARGET_LANGUAGE-}")" > "$root/conversion-env.json"
             fi
-            if [[ $# -eq 1 && "$1" == --list-runtimes ]]; then
+            if [[ -n "${STARFORGE_TEST_DLL:-}" && "${1:-}" == "$STARFORGE_TEST_DLL" ]]; then
+                # The model diff would dotnet-run (and build) a project, so tests see it fail instead.
+                [[ "${2:-}" == diff-rekt ]] && exit 1
+                exec "$LMA_REAL_DOTNET" "$@"
+            elif [[ $# -eq 1 && "$1" == --list-runtimes ]]; then
                 echo "Microsoft.NETCore.App 10.0.0"
             elif has -getProperty:TargetPath; then
                 printf '%s\n' "$LMA_TEST_DLL"
