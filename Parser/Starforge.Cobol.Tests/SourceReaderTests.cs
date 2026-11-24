@@ -95,6 +95,21 @@ public sealed class SourceReaderTests
     }
 
     [Fact]
+    public void TabsPushingCodePastColumn72AreReported()
+    {
+        using var estate = new TestEstate();
+        var r = estate.Program(
+            Fixed.A("01  REC."),
+            "\t\t     05  CUST-FIRST-NAME                         PIC X(25).",
+            "\t\t     05  OK PIC X.");
+
+        var warning = r.Diagnostics.Should().ContainSingle(d => d.Code == "tab-overflow").Subject;
+        warning.Severity.Should().Be(DiagnosticSeverity.Warning);
+        warning.Range!.Value.StartLine.Should().Be(2);
+        r.Texts().Should().Contain("X(2");
+    }
+
+    [Fact]
     public void FreeFormatSourceKeepsTextBeyondColumn72AndDropsFloatingComments()
     {
         using var estate = new TestEstate();

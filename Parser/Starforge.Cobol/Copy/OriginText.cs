@@ -109,11 +109,11 @@ internal sealed class OriginTextBuilder
             var delta = pos - seg.Start;
             if (seg.IsFromReplacement)
             {
-                AddSegment(seg with { Length = pieceEnd - pos, ReplacementOffset = seg.ReplacementOffset + delta });
+                AddSegment(seg with { Length = pieceEnd - pos, ReplacementOffset = seg.ReplacementOffset + delta }, _text.Length + (pos - start));
             }
             else
             {
-                AddSegment(seg with { Length = pieceEnd - pos, SourceOffset = seg.SourceOffset + delta });
+                AddSegment(seg with { Length = pieceEnd - pos, SourceOffset = seg.SourceOffset + delta }, _text.Length + (pos - start));
             }
 
             pos = pieceEnd;
@@ -142,7 +142,7 @@ internal sealed class OriginTextBuilder
             var replUnit = seg.IsFromReplacement ? seg.ReplacementUnit : seg.Unit;
             var replOffset = seg.IsFromReplacement ? seg.ReplacementOffset + delta : seg.SourceOffset + delta;
             var anchored = unit >= 0 ? (unit, offset, length) : (replUnit, replOffset, pieceEnd - pos);
-            AddSegment(new TextSegment(0, pieceEnd - pos, anchored.Item1, anchored.Item2, SegmentFlags.FromReplacement, anchored.Item3, replUnit, replOffset));
+            AddSegment(new TextSegment(0, pieceEnd - pos, anchored.Item1, anchored.Item2, SegmentFlags.FromReplacement, anchored.Item3, replUnit, replOffset), _text.Length + (pos - start));
             pos = pieceEnd;
             segIndex++;
         }
@@ -157,7 +157,7 @@ internal sealed class OriginTextBuilder
             return;
         }
 
-        AddSegment(new TextSegment(0, text.Length, -1, 0, SegmentFlags.Synthetic));
+        AddSegment(new TextSegment(0, text.Length, -1, 0, SegmentFlags.Synthetic), _text.Length);
         _text.Append(text);
     }
 
@@ -186,9 +186,10 @@ internal sealed class OriginTextBuilder
         return (seg.Unit, seg.SourceOffset + (from - seg.Start), Math.Min(end, seg.End) - from);
     }
 
-    private void AddSegment(TextSegment segment)
+    // The text of a multi-piece append is added after all its segments, so callers pass each piece's start.
+    private void AddSegment(TextSegment segment, int at)
     {
-        segment = segment with { Start = _text.Length };
+        segment = segment with { Start = at };
         if (_segments.Count > 0)
         {
             var last = _segments[^1];

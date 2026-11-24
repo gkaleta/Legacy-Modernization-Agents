@@ -277,7 +277,8 @@ public static class Lexer
                 _inIdentificationDivision = Is(Tokens[^1], "IDENTIFICATION") || Is(Tokens[^1], "ID");
             }
 
-            var startsCommentEntry = _inIdentificationDivision && AfterPeriodOrStart() && IsCommentEntryParagraph(text);
+            // A comment-entry need not end with a period, so the next paragraph may directly follow one.
+            var startsCommentEntry = _inIdentificationDivision && (AfterPeriodOrStart() || Tokens[^1].Kind == TokenKind.CommentEntry) && IsCommentEntryParagraph(text);
             Emit(TokenKind.Word, start, end - start);
             if (startsCommentEntry)
             {

@@ -2,7 +2,9 @@ using System.Text.RegularExpressions;
 using Starforge.Cobol.Copy;
 using Starforge.Cobol.Coverage;
 using Starforge.Cobol.Lexing;
+using Starforge.Cobol.Semantics;
 using Starforge.Cobol.Source;
+using Starforge.Cobol.Syntax;
 
 namespace Starforge.Cobol;
 
@@ -26,8 +28,12 @@ public sealed class CompilationResult
         TokenAccounting accounting,
         CoverageReport coverage,
         bool debuggingMode,
-        bool decimalPointIsComma)
+        bool decimalPointIsComma,
+        CompilationUnitSyntax syntax,
+        IReadOnlyList<ProgramData> programs)
     {
+        Syntax = syntax;
+        Programs = programs;
         Program = program;
         Units = units;
         Inclusions = inclusions;
@@ -59,6 +65,12 @@ public sealed class CompilationResult
 
     public bool DebuggingMode { get; }
 
+    // IDENTIFICATION/ENVIRONMENT/DATA syntax; the PROCEDURE DIVISION body is an opaque token range until M3.
+    public CompilationUnitSyntax Syntax { get; }
+
+    // Data layout per program, in Syntax.AllPrograms() order.
+    public IReadOnlyList<ProgramData> Programs { get; }
+
     public bool DecimalPointIsComma { get; }
 
     public int PhysicalLines => Program.Source.File.Lines.Count;
@@ -69,6 +81,13 @@ public sealed class CompilationResult
     public int ExpandedCodeLines => Units.Sum(u => u.Source.Lines.Count(l => l.Kind is SourceLineKind.Code or SourceLineKind.Continuation));
 
     public CoverageReport RebuildCoverage() => Coverage = Accounting.BuildReport();
+
+    // Characters of the given class inside PROCEDURE DIVISION bodies; Lexed minus this is what M2 left unparsed.
+    public long CountInProcedureBodies(CoverageClass cls)
+        => Syntax.AllPrograms()
+            .Select(p => p.Procedure?.Body)
+            .Where(b => b is { IsEmpty: false })
+            .Sum(b => Accounting.CountExpanded(Expanded.Text, b!.Value.Start, b.Value.End, cls));
 }
 
 // Thread-safe: one instance can process many programs in parallel and shares the copybook cache between them.
@@ -110,7 +129,12 @@ public sealed class CobolFrontEnd
         diagnostics.AddRange(lex.Diagnostics);
         MarkTokens(lex.Tokens, accounting);
 
-        return new CompilationResult(program, accounting.Units, inclusions, expanded, lex.Tokens, diagnostics, accounting, accounting.BuildReport(), debug, comma);
+        var parse = CobolParser.Parse(lex.Tokens, new ParserOptions(comma), accounting);
+        diagnostics.AddRange(parse.Diagnostics);
+        var programs = DataLayout.Compute(parse.Syntax, accounting.Units);
+        diagnostics.AddRange(programs.SelectMany(p => p.Diagnostics));
+
+        return new CompilationResult(program, accounting.Units, inclusions, expanded, lex.Tokens, diagnostics, accounting, accounting.BuildReport(), debug, comma, parse.Syntax, programs);
     }
 
     private static void MarkTokens(TokenStream tokens, TokenAccounting accounting)

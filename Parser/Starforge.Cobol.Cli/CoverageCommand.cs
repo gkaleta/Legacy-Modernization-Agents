@@ -26,9 +26,20 @@ internal sealed record ProgramSummary(
     int Warnings,
     IReadOnlyList<string> Fingerprints,
     int? PreprocessedLines,
-    string? Exception)
+    string? Exception,
+    long ProcedureLexed = 0,
+    IReadOnlyList<string>? ErrorNodes = null,
+    int SyntaxPrograms = 0,
+    int DataItems = 0)
 {
     public long Count(CoverageClass cls) => Characters.TryGetValue(cls, out var n) ? n : 0;
+
+    public IReadOnlyList<string> ErrorNodeFingerprints => ErrorNodes ?? Array.Empty<string>();
+
+    // Code characters of IDENTIFICATION/ENVIRONMENT/DATA: parsed, rejected by the parser, or still only lexed (EXEC blocks).
+    public long DivisionScope => Count(CoverageClass.Parsed) + SyntaxErrorCharacters + (Count(CoverageClass.Lexed) - ProcedureLexed);
+
+    public long SyntaxErrorCharacters { get; init; }
 }
 
 internal static class CoverageCommand
@@ -79,6 +90,7 @@ internal static class CoverageCommand
         var conflicts = ordered.Sum(s => s.Conflicts);
         var total = ordered.Sum(s => s.Total);
         stdout.WriteLine($"programs={ordered.Count} exceptions={exceptions} unaccounted={unaccounted} conflicts={conflicts} " +
+            $"parsed={Pct(ordered.Sum(s => s.Count(CoverageClass.Parsed)), total)} id-env-data-parsed={Pct(ordered.Sum(s => s.Count(CoverageClass.Parsed)), ordered.Sum(s => s.DivisionScope))} error-nodes={ordered.Sum(s => s.ErrorNodeFingerprints.Count)} " +
             $"lexed={Pct(ordered.Sum(s => s.Count(CoverageClass.Lexed)), total)} comment={Pct(ordered.Sum(s => s.Count(CoverageClass.Comment)), total)} " +
             $"unsupported={Pct(ordered.Sum(s => s.Count(CoverageClass.Unsupported)), total)} unresolved-copybooks={ordered.SelectMany(s => s.Unresolved).Distinct().Count()} " +
             $"elapsed={clock.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture)}s");
@@ -133,6 +145,7 @@ internal static class CoverageCommand
             }
 
             var diags = r.Diagnostics.Distinct().ToList();
+            var errorNodes = r.Syntax.Errors.Concat(r.Syntax.AllPrograms().SelectMany(p => p.AllErrors())).Select(e => e.Diagnostic.Fingerprint).ToList();
             return new ProgramSummary(
                 name,
                 estate,
@@ -150,7 +163,14 @@ internal static class CoverageCommand
                 diags.Count(d => d.Severity == DiagnosticSeverity.Warning),
                 diags.Where(d => d.Severity != DiagnosticSeverity.Info).Select(d => d.Fingerprint).ToList(),
                 PreprocessedLineCount(root, path),
-                null);
+                null,
+                r.CountInProcedureBodies(CoverageClass.Lexed),
+                errorNodes,
+                r.Programs.Count,
+                r.Programs.Sum(p => p.Items.Count))
+            {
+                SyntaxErrorCharacters = r.Coverage.ByReason.TryGetValue("Unsupported(syntax-error)", out var se) ? se : 0,
+            };
         }
         catch (Exception ex)
         {
@@ -171,7 +191,7 @@ internal static class CoverageCommand
         using var stream = File.Create(path);
         using var w = new Utf8JsonWriter(stream, JsonReport.WriterOptions);
         w.WriteStartObject();
-        w.WriteString("milestone", "M1");
+        w.WriteString("milestone", "M2");
         WriteTotals(w, "totals", programs);
         w.WriteStartObject("estates");
         foreach (var g in programs.GroupBy(p => p.Estate).OrderBy(g => g.Key, StringComparer.Ordinal))
@@ -203,6 +223,20 @@ internal static class CoverageCommand
 
         w.WriteEndObject();
 
+        w.WriteStartObject("errorNodes");
+        foreach (var g in programs.SelectMany(p => p.ErrorNodeFingerprints.Select(f => (f, p.Program))).GroupBy(x => x.f).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal))
+        {
+            w.WriteStartArray(g.Key);
+            foreach (var prog in g.Select(x => x.Program).Distinct().OrderBy(x => x, StringComparer.Ordinal))
+            {
+                w.WriteStringValue(prog);
+            }
+
+            w.WriteEndArray();
+        }
+
+        w.WriteEndObject();
+
         w.WriteStartArray("programs");
         foreach (var p in programs)
         {
@@ -227,6 +261,11 @@ internal static class CoverageCommand
 
             w.WriteEndObject();
             w.WriteNumber("conflicts", p.Conflicts);
+            w.WriteNumber("divisionScope", p.DivisionScope);
+            w.WriteNumber("divisionParsedPercent", PctNum(p.Count(CoverageClass.Parsed), p.DivisionScope));
+            w.WriteNumber("syntaxPrograms", p.SyntaxPrograms);
+            w.WriteNumber("dataItems", p.DataItems);
+            w.WriteNumber("errorNodes", p.ErrorNodeFingerprints.Count);
             w.WriteNumber("errors", p.Errors);
             w.WriteNumber("warnings", p.Warnings);
             w.WriteStartArray("unresolved");
@@ -263,6 +302,16 @@ internal static class CoverageCommand
         }
 
         w.WriteNumber("conflicts", programs.Sum(p => p.Conflicts));
+        var scope = programs.Sum(p => p.DivisionScope);
+        w.WriteStartObject("identificationEnvironmentData");
+        w.WriteNumber("characters", scope);
+        w.WriteNumber("parsed", programs.Sum(p => p.Count(CoverageClass.Parsed)));
+        w.WriteNumber("syntaxErrors", programs.Sum(p => p.SyntaxErrorCharacters));
+        w.WriteNumber("parsedPercent", PctNum(programs.Sum(p => p.Count(CoverageClass.Parsed)), scope));
+        w.WriteEndObject();
+        w.WriteNumber("procedureBodyLexed", programs.Sum(p => p.ProcedureLexed));
+        w.WriteNumber("errorNodes", programs.Sum(p => p.ErrorNodeFingerprints.Count));
+        w.WriteNumber("dataItems", programs.Sum(p => p.DataItems));
         w.WriteNumber("unresolvedCopybooks", programs.SelectMany(p => p.Unresolved).Distinct().Count());
         w.WriteEndObject();
     }
@@ -270,19 +319,20 @@ internal static class CoverageCommand
     private static string SummaryMarkdown(IReadOnlyList<ProgramSummary> programs, RektComparison? rekt)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Starforge M1 coverage");
+        sb.AppendLine("# Starforge M2 coverage");
         sb.AppendLine();
         sb.AppendLine("Non-blank program-area characters (fixed format columns 8-72) of each program and every copybook instance it expands.");
-        sb.AppendLine("`Lexed` means accounted for by the lexer but not yet consumed by a parser (M2/M3).");
+        sb.AppendLine("`Parsed` is consumed by the IDENTIFICATION/ENVIRONMENT/DATA parser; `Lexed` is still waiting for a parser (PROCEDURE DIVISION bodies for M3, EXEC blocks for the Exec stage).");
+        sb.AppendLine("`ID+ENV+DATA parsed %` = Parsed / (Parsed + parser-rejected + Lexed outside PROCEDURE DIVISION bodies).");
         sb.AppendLine();
-        sb.AppendLine("| Estate | Programs | Exceptions | Total chars | Lexed % | Comment % | Directive % | Unsupported % | Unresolved % | Skipped % | Unaccounted | Conflicts | Unresolved copybooks |");
-        sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+        sb.AppendLine("| Estate | Programs | Exceptions | Total chars | Parsed % | ID+ENV+DATA parsed % | Error nodes | Lexed % | Comment % | Directive % | Unsupported % | Unresolved % | Skipped % | Unaccounted | Conflicts | Unresolved copybooks |");
+        sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
         foreach (var g in programs.GroupBy(p => p.Estate).OrderBy(g => g.Key, StringComparer.Ordinal).Append(programs.GroupBy(_ => "**all**").Single()))
         {
             var list = g.ToList();
             var total = list.Sum(p => p.Total);
             string P(CoverageClass c) => Pct(list.Sum(p => p.Count(c)), total);
-            sb.AppendLine($"| {g.Key} | {list.Count} | {list.Count(p => p.Exception is not null)} | {total} | {P(CoverageClass.Lexed)} | {P(CoverageClass.Comment)} | {P(CoverageClass.Directive)} | {P(CoverageClass.Unsupported)} | {P(CoverageClass.Unresolved)} | {P(CoverageClass.Skipped)} | {list.Sum(p => p.Count(CoverageClass.Unaccounted))} | {list.Sum(p => p.Conflicts)} | {list.SelectMany(p => p.Unresolved).Distinct().Count()} |");
+            sb.AppendLine($"| {g.Key} | {list.Count} | {list.Count(p => p.Exception is not null)} | {total} | {P(CoverageClass.Parsed)} | {Pct(list.Sum(p => p.Count(CoverageClass.Parsed)), list.Sum(p => p.DivisionScope))} | {list.Sum(p => p.ErrorNodeFingerprints.Count)} | {P(CoverageClass.Lexed)} | {P(CoverageClass.Comment)} | {P(CoverageClass.Directive)} | {P(CoverageClass.Unsupported)} | {P(CoverageClass.Unresolved)} | {P(CoverageClass.Skipped)} | {list.Sum(p => p.Count(CoverageClass.Unaccounted))} | {list.Sum(p => p.Conflicts)} | {list.SelectMany(p => p.Unresolved).Distinct().Count()} |");
         }
 
         sb.AppendLine();
@@ -314,19 +364,33 @@ internal static class CoverageCommand
         }
 
         sb.AppendLine();
+        sb.AppendLine("## Error nodes by fingerprint");
+        sb.AppendLine();
+        var errorNodes = programs.SelectMany(p => p.ErrorNodeFingerprints.Select(f => (f, p.Program))).GroupBy(x => x.f).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
+        if (errorNodes.Count == 0)
+        {
+            sb.AppendLine("None.");
+        }
+
+        foreach (var g in errorNodes)
+        {
+            sb.AppendLine($"- {g.Count()} × `{g.Key}`: {string.Join(", ", g.Select(x => x.Program).Distinct().OrderBy(x => x, StringComparer.Ordinal))}");
+        }
+
+        sb.AppendLine();
         sb.AppendLine("## Programs");
         sb.AppendLine();
-        sb.AppendLine("| Program | Physical lines | Expanded lines | Units | Tokens | Total chars | Lexed % | Comment % | Unsupported % | Unaccounted | Errors | Unresolved |");
-        sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
+        sb.AppendLine("| Program | Physical lines | Expanded lines | Units | Tokens | Total chars | Parsed % | ID+ENV+DATA parsed % | Data items | Error nodes | Lexed % | Comment % | Unsupported % | Unaccounted | Errors | Unresolved |");
+        sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
         foreach (var p in programs)
         {
             if (p.Exception is not null)
             {
-                sb.AppendLine($"| {p.Program} | EXCEPTION: {p.Exception.Split('\n')[0]} |||||||||||");
+                sb.AppendLine($"| {p.Program} | EXCEPTION: {p.Exception.Split('\n')[0]} |||||||||||||||");
                 continue;
             }
 
-            sb.AppendLine($"| {p.Program} | {p.PhysicalLines} | {p.ExpandedPhysicalLines} | {p.Units} | {p.Tokens} | {p.Total} | {Pct(p.Count(CoverageClass.Lexed), p.Total)} | {Pct(p.Count(CoverageClass.Comment), p.Total)} | {Pct(p.Count(CoverageClass.Unsupported), p.Total)} | {p.Count(CoverageClass.Unaccounted)} | {p.Errors} | {string.Join(", ", p.Unresolved)} |");
+            sb.AppendLine($"| {p.Program} | {p.PhysicalLines} | {p.ExpandedPhysicalLines} | {p.Units} | {p.Tokens} | {p.Total} | {Pct(p.Count(CoverageClass.Parsed), p.Total)} | {Pct(p.Count(CoverageClass.Parsed), p.DivisionScope)} | {p.DataItems} | {p.ErrorNodeFingerprints.Count} | {Pct(p.Count(CoverageClass.Lexed), p.Total)} | {Pct(p.Count(CoverageClass.Comment), p.Total)} | {Pct(p.Count(CoverageClass.Unsupported), p.Total)} | {p.Count(CoverageClass.Unaccounted)} | {p.Errors} | {string.Join(", ", p.Unresolved)} |");
         }
 
         if (rekt is not null)
@@ -337,6 +401,8 @@ internal static class CoverageCommand
 
         return sb.ToString();
     }
+
+    private static double PctNum(long n, long total) => total == 0 ? 0 : Math.Round(100.0 * n / total, 3);
 
     internal static string Pct(long n, long total) => total == 0 ? "0.00" : (100.0 * n / total).ToString("F2", CultureInfo.InvariantCulture);
 }

@@ -161,6 +161,62 @@ public sealed class TokenAccounting
         }
     }
 
+    // Same mapping as MarkExpanded, but only re-classifies characters currently claimed as 'from'.
+    public void PromoteExpanded(OriginText text, int start, int end, CoverageClass from, CoverageClass to, string reason)
+    {
+        if (end <= start)
+        {
+            return;
+        }
+
+        var segIndex = text.FindSegment(start);
+        var pos = start;
+        while (segIndex >= 0 && segIndex < text.Segments.Count && pos < end)
+        {
+            var seg = text.SegmentAt(segIndex);
+            var pieceEnd = Math.Min(end, seg.End);
+            if (!seg.IsSynthetic && !seg.IsFromReplacement && pieceEnd > pos)
+            {
+                var srcStart = seg.SourceOffset + (pos - seg.Start);
+                Promote(seg.Unit, srcStart, srcStart + (pieceEnd - pos), from, to, reason);
+            }
+
+            pos = Math.Max(pos, pieceEnd);
+            segIndex++;
+        }
+    }
+
+    // Counts original (non-replacement) characters of an expanded range that currently have the given class.
+    public long CountExpanded(OriginText text, int start, int end, CoverageClass cls)
+    {
+        long count = 0;
+        var segIndex = end > start ? text.FindSegment(start) : -1;
+        var pos = start;
+        while (segIndex >= 0 && segIndex < text.Segments.Count && pos < end)
+        {
+            var seg = text.SegmentAt(segIndex);
+            var pieceEnd = Math.Min(end, seg.End);
+            if (!seg.IsSynthetic && !seg.IsFromReplacement && pieceEnd > pos)
+            {
+                var arr = _classes[seg.Unit];
+                var srcStart = seg.SourceOffset + (pos - seg.Start);
+                var srcEnd = Math.Min(arr.Length, srcStart + (pieceEnd - pos));
+                for (var i = Math.Max(0, srcStart); i < srcEnd; i++)
+                {
+                    if (arr[i] == (byte)cls)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            pos = Math.Max(pos, pieceEnd);
+            segIndex++;
+        }
+
+        return count;
+    }
+
     public CoverageReport BuildReport()
     {
         var counts = new Dictionary<CoverageClass, long>();

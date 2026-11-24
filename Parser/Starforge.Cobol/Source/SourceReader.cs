@@ -122,6 +122,8 @@ public static partial class SourceReader
         private SourceFormat _lastCodeFormat;
         private int _tabLines;
         private int _firstTabLine;
+        private int _tabOverflowLines;
+        private int _firstTabOverflowLine;
 
         public ReaderState(SourceFile file, SourceFormat format, SourceReaderOptions options)
         {
@@ -161,6 +163,11 @@ public static partial class SourceReader
                 Diag("tab-expanded", DiagnosticSeverity.Info, $"{_tabLines} line(s) contain tabs; expanded to {SourceFile.TabStop}-column stops before column rules were applied", _firstTabLine, 1);
             }
 
+            if (_tabOverflowLines > 0)
+            {
+                Diag("tab-overflow", DiagnosticSeverity.Warning, $"{_tabOverflowLines} line(s) with tabs extend past column {ProgramAreaEnd} after expansion; the text beyond it is ignored", _firstTabOverflowLine, ProgramAreaEnd + 1);
+            }
+
             return new LogicalSource(_file, _initialFormat, _lines, _text.ToString(), _runs, _marks, _diagnostics);
         }
 
@@ -176,6 +183,13 @@ public static partial class SourceReader
 
             MarkOutside(number, raw, 1, 6, ReaderArea.Sequence, "sequence-area");
             MarkOutside(number, raw, 73, int.MaxValue, ReaderArea.Identification, "identification-area");
+
+            // Tabs are not valid in IBM fixed-form source; text they push into columns 73+ is a likely editing accident.
+            if (hadTabs && raw.Length > ProgramAreaEnd && !IsBlank(raw, ProgramAreaEnd + 1, raw.Length) && _tabOverflowLines++ == 0)
+            {
+                _firstTabOverflowLine = number;
+            }
+
             if (raw.Length < 7 || IsBlank(raw, 7, ProgramAreaEnd))
             {
                 AddLine(number, raw, SourceLineKind.Blank, hadTabs);

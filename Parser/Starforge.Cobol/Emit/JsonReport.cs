@@ -135,6 +135,8 @@ public static class JsonReport
 
         w.WriteEndArray();
 
+        SyntaxReport.WritePrograms(w, r, paths);
+
         w.WriteStartArray("ranges");
         foreach (var e in cov.Ranges)
         {
@@ -162,6 +164,7 @@ public static class JsonReport
         w.WriteNumber("tokenCount", r.Tokens.Count);
         WriteCoverageSummary(w, r.Coverage);
         WriteUnresolved(w, r);
+        SyntaxReport.WritePrograms(w, r, paths);
         w.WriteStartArray("tokens");
         var tokens = r.Tokens;
         for (var i = 0; i < tokens.Count; i++)
