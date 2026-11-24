@@ -82,6 +82,7 @@ internal static class SqlParser
         public required ExecBlockContext Ctx;
         public required List<SToken> T;
         public readonly List<SqlTableReference> Tables = new();
+        public readonly List<(int First, int End)> TableTokens = new();
         public readonly List<string> Ctes = new();
         public string? Problem;
         public int ProblemAt = -1;
@@ -340,7 +341,8 @@ internal static class SqlParser
         }
 
         var ctes = new HashSet<string>(r.Ctes, StringComparer.Ordinal);
-        var tables = r.Tables.Where(x => x.Schema is not null || !ctes.Contains(x.Table)).ToList();
+        var kept = Enumerable.Range(0, r.Tables.Count).Where(i => r.Tables[i].Schema is not null || !ctes.Contains(r.Tables[i].Table)).ToList();
+        var tables = kept.Select(i => r.Tables[i]).ToList();
         if (r.Problem is not null)
         {
             var at = r.ProblemAt >= 0 && r.ProblemAt < t.Count ? t[r.ProblemAt] : t[0];
@@ -360,6 +362,8 @@ internal static class SqlParser
             StatementKind = kind,
             Leading = Leading(t),
             Tables = tables,
+            Tokens = t,
+            TableTokens = kept.Select(i => r.TableTokens[i]).ToList(),
             CommonTableExpressions = r.Ctes,
             HostVariables = HostVariables(t, kind),
             Cursor = cursor,
@@ -498,6 +502,7 @@ internal static class SqlParser
         }
 
         r.Tables.Add(name with { Operation = op });
+        r.TableTokens.Add((at, next));
         return next;
     }
 
@@ -635,6 +640,7 @@ internal static class SqlParser
                     }
 
                     r.Tables.Add(name);
+                    r.TableTokens.Add((i, next));
                     scope.TableIndex = r.Tables.Count - 1;
                     scope.State = FromState.AfterTable;
                     i = next - 1;

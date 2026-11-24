@@ -10,7 +10,7 @@ internal static class NativeExportCommand
 
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
-        cmd.RejectUnknown("program", "copybooks", "profile", "out");
+        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "out");
         if (cmd.Positional.Count > 0)
         {
             throw new UsageException($"unexpected argument '{cmd.Positional[0]}'");
@@ -38,7 +38,17 @@ internal static class NativeExportCommand
             return 2;
         }
 
-        var document = NativeExporter.Export(new NativeExportOptions(program, copybooks, profile is { Length: > 0 } ? profile : null));
+        // Each option repeats or takes a path-separator list, the form the pipeline's REKT_* settings use.
+        var cics = Files(cmd, "cics-definitions");
+        var vsam = Files(cmd, "vsam-definitions");
+        var sql = Files(cmd, "sql-declarations");
+        if (cics.Concat(vsam).Concat(sql).FirstOrDefault(f => !File.Exists(f)) is { } missing)
+        {
+            stderr.WriteLine($"error: resource definition file not found: {missing}");
+            return 2;
+        }
+
+        var document = NativeExporter.Export(new NativeExportOptions(program, copybooks, profile is { Length: > 0 } ? profile : null, cics, vsam, sql));
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         File.WriteAllText(output, document.ToJsonString(Indented) + "\n");
         var diagnostics = document["dependencyDiagnostics"]!.AsArray();
@@ -49,4 +59,7 @@ internal static class NativeExportCommand
 
         return 0;
     }
+
+    private static List<string> Files(CommandLine cmd, string option) =>
+        cmd.All(option).SelectMany(v => v.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)).Select(Path.GetFullPath).ToList();
 }

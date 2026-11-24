@@ -191,6 +191,11 @@ public sealed class SqlStatement : ExecStatement
 
     public IReadOnlyList<SqlTableReference> Tables { get; init; } = Array.Empty<SqlTableReference>();
 
+    // The statement's tokens (offsets into the EXEC block text) and, per entry of Tables, its [First, End) token span.
+    internal IReadOnlyList<SToken> Tokens { get; init; } = Array.Empty<SToken>();
+
+    internal IReadOnlyList<(int First, int End)> TableTokens { get; init; } = Array.Empty<(int, int)>();
+
     public IReadOnlyList<string> CommonTableExpressions { get; init; } = Array.Empty<string>();
 
     public IReadOnlyList<SqlHostVariable> HostVariables { get; init; } = Array.Empty<SqlHostVariable>();

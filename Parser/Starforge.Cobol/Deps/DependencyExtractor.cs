@@ -272,13 +272,26 @@ internal sealed class ConstantResolver
     private readonly ProgramData _data;
     private readonly List<(DataItem Root, int Start, int End)> _touched = new();
 
-    public ConstantResolver(ProgramData data, ProcedureBindings bindings, ProcedureDivision procedure, IReadOnlyList<Statement> statements, IEnumerable<Exec.ExecStatement> execs)
+    // readOnly names the EXEC options whose operand is only read; callTargetsRead does the same for CALL programs;
+    // reads lists further procedure references that only read their storage.
+    public ConstantResolver(
+        ProgramData data,
+        ProcedureBindings bindings,
+        ProcedureDivision procedure,
+        IReadOnlyList<Statement> statements,
+        IEnumerable<Exec.ExecStatement> execs,
+        Func<CicsCommand, ExecOption, bool>? readOnly = null,
+        bool callTargetsRead = true,
+        IReadOnlySet<DataRef>? reads = null)
     {
         _data = data;
-        var programTargets = new HashSet<DataRef>(statements.OfType<CallStatement>().Select(c => c.Target).OfType<DataRef>(), ReferenceEqualityComparer.Instance);
+        readOnly ??= (c, o) => o.Name == "PROGRAM" && c.Verb is "LINK" or "XCTL";
+        var programTargets = callTargetsRead
+            ? new HashSet<DataRef>(statements.OfType<CallStatement>().Select(c => c.Target).OfType<DataRef>(), ReferenceEqualityComparer.Instance)
+            : new HashSet<DataRef>(ReferenceEqualityComparer.Instance);
         foreach (var reference in procedure.DataReferences)
         {
-            if (!programTargets.Contains(reference))
+            if (!programTargets.Contains(reference) && reads?.Contains(reference) != true)
             {
                 Touch(bindings.ItemOf(reference) is { } item ? new[] { item } : Lookup(reference.Name.Name, reference.Name.Qualifiers));
             }
@@ -288,7 +301,7 @@ internal sealed class ConstantResolver
         {
             var options = exec switch
             {
-                CicsCommand c => c.Options.Where(o => !(o.Name == "PROGRAM" && c.Verb is "LINK" or "XCTL")),
+                CicsCommand c => c.Options.Where(o => !readOnly(c, o)),
                 DliCommand d => d.Options.Concat(d.Segments.SelectMany(s => s.Options)),
                 _ => Enumerable.Empty<ExecOption>(),
             };

@@ -8,8 +8,17 @@ namespace Starforge.Cobol.Native;
 
 // ProgramPath is the program inside its dependency search view (a folder holding the program and the callees
 // it may statically CALL); CopybookRoot is the folder copybooks resolve from. Profile is the target-port
-// profile whose runtimeContracts document CALL targets that have no COBOL source.
-public sealed record NativeExportOptions(string ProgramPath, string CopybookRoot, string? ProfilePath = null);
+// profile whose runtimeContracts document CALL targets that have no COBOL source. CicsDefinitions are the
+// region's resource definitions (DFHCSDUP extracts or resourceDefinitions YAML) and VsamDefinitions the JCL whose
+// IDCAMS steps define the clusters behind CICS files. SqlDeclarations are members holding DECLARE TABLE
+// statements the programs use without INCLUDE-ing them.
+public sealed record NativeExportOptions(
+    string ProgramPath,
+    string CopybookRoot,
+    string? ProfilePath = null,
+    IReadOnlyList<string>? CicsDefinitions = null,
+    IReadOnlyList<string>? VsamDefinitions = null,
+    IReadOnlyList<string>? SqlDeclarations = null);
 
 // Writes the native dependency contract the dependency evidence gate verifies, from Starforge's own parse.
 // Statement and definition trees are Starforge nodes with source ranges; a construct this exporter cannot
@@ -32,12 +41,17 @@ public static class NativeExporter
         var program = Path.GetFullPath(options.ProgramPath);
         var profile = options.ProfilePath is { Length: > 0 } p ? Profile.Load(Path.GetFullPath(p)) : null;
         var frontEnd = new CobolFrontEnd(new FrontEndOptions(new[] { Path.GetFullPath(options.CopybookRoot) }));
-        var exporter = new Run(frontEnd, profile, Path.GetDirectoryName(program)!);
+        var catalog = CicsCatalog.Load(options.CicsDefinitions ?? []);
+        var vsam = VsamCatalog.Load(options.VsamDefinitions ?? []);
+        var sql = SqlCatalog.Load(frontEnd, options.SqlDeclarations ?? []);
+        var exporter = new Run(frontEnd, profile, Path.GetDirectoryName(program)!, catalog, vsam, sql);
         return exporter.Program(program, Path.GetFileName(program), "PROGRAM", new HashSet<string>(StringComparer.Ordinal));
     }
 
-    private sealed record Profile(string Path, string Sha256, string Name, string Kind, JsonObject Contracts)
+    private sealed record Profile(string Path, string Sha256, string Name, string Kind, JsonObject Contracts, string? SqlSchema)
     {
+        public SqlProfile Sql => new(Path, Sha256, Name, Kind, SqlSchema);
+
         public static Profile Load(string path)
         {
             var document = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
@@ -47,17 +61,28 @@ public static class NativeExporter
                 NativeSyntax.FileSha256(path),
                 (string?)document["profileName"] ?? string.Empty,
                 (string?)document["profileKind"] ?? string.Empty,
-                document["runtimeContracts"] as JsonObject ?? new JsonObject());
+                document["runtimeContracts"] as JsonObject ?? new JsonObject(),
+                (string?)document["sqlDefaultSchema"]);
         }
     }
 
-    private sealed class Run(CobolFrontEnd frontEnd, Profile? profile, string searchView)
+    private sealed class Run(CobolFrontEnd frontEnd, Profile? profile, string searchView, CicsCatalog catalog, VsamCatalog vsam, SqlCatalog sqlCatalog)
     {
+        private string? Source(string name) =>
+            Directory.EnumerateFiles(searchView)
+                .Where(f => SourceSuffixes.Contains(Path.GetExtension(f))
+                    && string.Equals(Path.GetFileNameWithoutExtension(f), name, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f, StringComparer.Ordinal)
+                .FirstOrDefault();
+
         public JsonObject Program(string path, string name, string kind, HashSet<string> active)
         {
             active.Add(path);
             var result = frontEnd.Process(path);
             var roots = new SyntaxRoots(result);
+            var data = new NativeData(result, roots);
+            var cics = new NativeCics(data, catalog, vsam, n => Source(n) is { } found ? Path.GetFullPath(found) : null);
+            var sql = new NativeSql(data, sqlCatalog, profile?.Sql);
             var diagnostics = new List<string>();
             var statements = new JsonArray();
             var children = new List<JsonObject>();
@@ -75,12 +100,22 @@ public static class NativeExporter
             var fileIo = false;
             for (var u = 0; u < units.Count; u++)
             {
+                foreach (var dialect in sql.Statements(units[u], diagnostics))
+                {
+                    statements.Add(dialect);
+                }
+
                 if (units[u].Procedure is not { } procedure)
                 {
                     continue;
                 }
 
                 var files = FileBindings(units[u], roots);
+                foreach (var value in CicsValues(procedure, roots, cics, diagnostics))
+                {
+                    statements.Add(value);
+                }
+
                 foreach (var statement in procedure.AllStatements())
                 {
                     switch (statement)
@@ -100,12 +135,26 @@ public static class NativeExporter
                             }
 
                             break;
-                        case ExecStatementSyntax exec:
-                            if (Exec(exec, roots, diagnostics) is { } dialect)
+                        case ExecStatementSyntax { Parsed: CicsCommand command } exec:
+                            var links = new List<string>();
+                            foreach (var dialect in cics.Statements(exec, command, units[u], diagnostics, links))
                             {
                                 statements.Add(dialect);
                             }
 
+                            foreach (var link in links)
+                            {
+                                if (seen.Add("CICS_LINK:" + link) && Link(link, active, diagnostics) is { } linked)
+                                {
+                                    children.Add(linked);
+                                }
+                            }
+
+                            break;
+                        case ExecStatementSyntax { Kind: ExecKind.Sql or ExecKind.SqlIms }:
+                            break;
+                        case ExecStatementSyntax exec:
+                            diagnostics.Add($"starforge-unsupported:{exec.Kind.ToString().ToLowerInvariant()}:{exec.Parsed.Operation}");
                             break;
                     }
                 }
@@ -280,11 +329,7 @@ public static class NativeExporter
             }
 
             var name = literal.Trim('\'', '"').ToUpperInvariant();
-            var callee = Directory.EnumerateFiles(searchView)
-                .Where(f => SourceSuffixes.Contains(Path.GetExtension(f))
-                    && string.Equals(Path.GetFileNameWithoutExtension(f), name, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(f => f, StringComparer.Ordinal)
-                .FirstOrDefault();
+            var callee = Source(name);
             if (callee is not null)
             {
                 if (active.Contains(callee))
@@ -465,38 +510,76 @@ public static class NativeExporter
             };
         }
 
-        private static JsonObject? Exec(ExecStatementSyntax exec, SyntaxRoots roots, List<string> diagnostics)
+        private JsonObject? Link(string name, HashSet<string> active, List<string> diagnostics)
         {
-            switch (exec.Parsed)
+            var callee = Path.GetFullPath(Source(name)!);
+            if (active.Contains(callee))
             {
-                case CicsCommand { Verb: "RETURN", Options.Count: 0 } command:
+                diagnostics.Add($"starforge-unsupported:recursive-link:{name}");
+                return null;
+            }
+
+            return Program(callee, name, "CICS_LINK", active);
+        }
+
+        // DFHRESP/DFHVALUE values in procedure statements, found as CicsValue nodes anywhere in the syntax tree.
+        private static IEnumerable<JsonObject> CicsValues(ProcedureDivision procedure, SyntaxRoots roots, NativeCics cics, List<string> diagnostics)
+        {
+            var found = new List<CicsValue>();
+            Walk(procedure, found, new HashSet<object>(ReferenceEqualityComparer.Instance));
+            var tokens = roots.Tokens;
+            foreach (var value in found.DistinctBy(v => v.Span.FirstToken).OrderBy(v => v.Span.FirstToken))
+            {
+                var span = value.Span;
+                var operation = value.Function.ToUpperInvariant();
+                if (span.EndToken - span.FirstToken != 4 || !NativeCics.ValueSymbols.TryGetValue(operation, out var symbols)
+                    || !symbols.Contains(value.Argument.ToUpperInvariant()))
                 {
-                    var syntax = roots.Root(NativeSyntax.Node("CicsCommand", [NativeSyntax.Token("RETURN")]), command.ExpandedStart, command.ExpandedEnd, "cics:RETURN");
-                    var (line, column) = roots.Position(roots.Tokens[exec.Span.FirstToken].Start);
-                    return new JsonObject
-                    {
-                        ["kind"] = "EXEC_CICS",
-                        ["operation"] = "RETURN",
-                        ["grammarRule"] = "CicsCommand",
-                        ["sourceText"] = "RETURN",
-                        ["coordinateSpace"] = "expanded-parser-input",
-                        ["line"] = line,
-                        ["column"] = column,
-                        ["runtimeMapping"] = "unverified",
-                        ["syntax"] = syntax,
-                        ["resourceReferences"] = new JsonArray(),
-                        ["resourceBindings"] = new JsonArray(),
-                        ["bindingStatus"] = "complete",
-                        ["bindingBasis"] = "parsed-cics-terminal-operation",
-                    };
+                    diagnostics.Add($"starforge-unsupported:cics-value:{operation}({value.Argument.ToUpperInvariant()})");
+                    continue;
                 }
 
-                case CicsCommand command:
-                    diagnostics.Add($"starforge-unsupported:cics:{command.Verb}");
-                    return null;
-                default:
-                    diagnostics.Add($"starforge-unsupported:{exec.Kind.ToString().ToLowerInvariant()}:{exec.Parsed.Operation}");
-                    return null;
+                var node = NativeSyntax.Node("CicsValue", Enumerable.Range(span.FirstToken, 4).Select(t => (JsonNode)NativeSyntax.Token(tokens.Text(t))));
+                var start = tokens[span.FirstToken].Start;
+                var end = tokens[span.EndToken - 1].End;
+                yield return cics.Value(node, operation, string.Join(string.Empty, Enumerable.Range(span.FirstToken, 4).Select(tokens.Text)), start, end);
+            }
+        }
+
+        private static void Walk(object? node, List<CicsValue> found, HashSet<object> visited)
+        {
+            if (node is null || node is string || node.GetType().IsPrimitive || node.GetType().IsEnum || !visited.Add(node))
+            {
+                return;
+            }
+
+            if (node is CicsValue value)
+            {
+                found.Add(value);
+                return;
+            }
+
+            if (node is System.Collections.IEnumerable items)
+            {
+                foreach (var item in items)
+                {
+                    Walk(item, found, visited);
+                }
+
+                return;
+            }
+
+            if (node.GetType().Namespace != typeof(Statement).Namespace)
+            {
+                return;
+            }
+
+            foreach (var property in node.GetType().GetProperties())
+            {
+                if (property.GetIndexParameters().Length == 0 && !property.PropertyType.IsValueType)
+                {
+                    Walk(property.GetValue(node), found, visited);
+                }
             }
         }
     }
