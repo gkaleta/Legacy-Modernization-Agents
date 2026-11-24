@@ -20,7 +20,6 @@ internal sealed class ReachingDefinitions
 
     private readonly ProcedureDivision _procedure;
     private readonly ProcedureBindings _bindings;
-    private readonly ProgramData _data;
     private readonly TokenStream _tokens;
     private readonly DataItem _item;
     private readonly Statement _at;
@@ -33,7 +32,7 @@ internal sealed class ReachingDefinitions
     private readonly Stack<Frame> _frames = new();
     private readonly HashSet<(int First, int End)> _abandoned = new();
     private readonly HashSet<(int Unit, int First, int End)> _visits = new();
-    private readonly DataRef[] _references;
+    private readonly NativeWrites _writes;
     private int[]? _reaching;
     private int _steps;
 
@@ -58,11 +57,10 @@ internal sealed class ReachingDefinitions
     {
         _procedure = procedure;
         _bindings = bindings;
-        _data = data;
         _tokens = tokens;
         _item = item;
         _at = at;
-        _references = procedure.DataReferences.OrderBy(r => r.Span.FirstToken).ToArray();
+        _writes = new NativeWrites(procedure, bindings, data);
         foreach (var section in procedure.Sections)
         {
             var first = _units.Count;
@@ -104,7 +102,7 @@ internal sealed class ReachingDefinitions
             throw new Unsupported("declaratives");
         }
 
-        foreach (var reference in _references)
+        foreach (var reference in _writes.References)
         {
             var at = reference.Span.FirstToken;
             if (at >= 2 && Word(at - 1, "OF") && Word(at - 2, "ADDRESS") && Overlaps(reference))
@@ -417,74 +415,10 @@ internal sealed class ReachingDefinitions
         source is FigurativeExpr { Figurative: FigurativeKind.Space or FigurativeKind.LowValue, Of: null } figurative
         && figurative.Span.TokenCount == 1;
 
-    private bool Writes(Statement statement)
-    {
-        if (statement is ExecStatementSyntax exec)
-        {
-            return ExecWrites(exec.Parsed);
-        }
+    private bool Writes(Statement statement) =>
+        _writes.Writes(statement, _item, (c, o) => NativeCics.NameOptions(c, o) || o.Name == "FROM");
 
-        var nested = statement.Children().Select(c => (c.Span.FirstToken, c.Span.EndToken)).ToList();
-        var reads = NativeReads.Of([statement]);
-        foreach (var reference in References(statement.Span))
-        {
-            var at = reference.Span.FirstToken;
-            if (!reads.Contains(reference) && !nested.Any(n => n.FirstToken <= at && at < n.EndToken) && Overlaps(reference))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private IEnumerable<DataRef> References(NodeSpan span)
-    {
-        var low = 0;
-        var high = _references.Length;
-        while (low < high)
-        {
-            var mid = (low + high) / 2;
-            if (_references[mid].Span.FirstToken < span.FirstToken)
-            {
-                low = mid + 1;
-            }
-            else
-            {
-                high = mid;
-            }
-        }
-
-        for (var i = low; i < _references.Length && _references[i].Span.FirstToken < span.EndToken; i++)
-        {
-            yield return _references[i];
-        }
-    }
-
-    private bool ExecWrites(Exec.ExecStatement exec)
-    {
-        IEnumerable<ExecOption> options = exec switch
-        {
-            CicsCommand c => c.Options.Where(o => !NativeCics.NameOptions(c, o) && o.Name != "FROM"),
-            DliCommand d => d.Options.Concat(d.Segments.SelectMany(s => s.Options)),
-            _ => [],
-        };
-        if (options.Any(o => o.Argument?.DataName is { } name && Overlaps(_data.Symbols.Resolve(name).Candidates)))
-        {
-            return true;
-        }
-
-        return exec is SqlStatement sql && sql.HostVariables.Any(h =>
-            Overlaps(_data.Symbols.Resolve(h.Field, h.Qualifier is null ? null : [h.Qualifier]).Candidates)
-            || h.Indicator is { } indicator && Overlaps(_data.Symbols.Resolve(indicator).Candidates));
-    }
-
-    private bool Overlaps(DataRef reference) =>
-        Overlaps(_bindings.ItemOf(reference) is { } item ? [item] : _data.Symbols.Resolve(reference.Name).Candidates);
-
-    private bool Overlaps(IReadOnlyList<DataItem> candidates) => candidates.Any(c => c.IsRenames
-        ? ReferenceEquals(Deps.ConstantResolver.Extent(c).Root, Deps.ConstantResolver.Extent(_item).Root)
-        : NativeData.Overlap(c.IsCondition && c.Parent is { } parent ? parent : c, _item));
+    private bool Overlaps(DataRef reference) => _writes.Overlaps(reference, _item);
 
     private static int[]? Join(int[]? a, int[]? b) =>
         a is null ? b : b is null ? a : a.Union(b).Order().ToArray();

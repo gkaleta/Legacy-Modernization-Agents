@@ -42,22 +42,34 @@ internal sealed partial class NativeCics
     private readonly VsamCatalog _vsam;
     private readonly BmsLayouts _layouts;
     private readonly Func<string, string?> _programSource;
+    private readonly string? _commareaClosure;
+    private readonly string? _programSha256;
+    private readonly Dictionary<(ProgramUnit, string, int, int), string?> _constantValues = new();
 
-    // programSource finds a program's source in the dependency search view.
-    public NativeCics(NativeData data, CicsCatalog catalog, VsamCatalog vsam, BmsLayouts layouts, Func<string, string?> programSource)
+    // programSource finds a program's source in the dependency search view. commareaClosure is the estate's
+    // COMMAREA closure, which bounds slots the program loads from DFHCOMMAREA; programSha256 keys it.
+    public NativeCics(
+        NativeData data, CicsCatalog catalog, VsamCatalog vsam, BmsLayouts layouts, Func<string, string?> programSource,
+        string? commareaClosure = null, string? programSha256 = null)
     {
         _data = data;
         _catalog = catalog;
         _vsam = vsam;
         _layouts = layouts;
         _programSource = programSource;
+        _commareaClosure = commareaClosure;
+        _programSha256 = programSha256;
     }
 
     private sealed record Option(string Name, int NameToken, ExecArgument? Argument, int Open, int Close, JsonObject Node);
 
     private sealed record Reference(JsonObject Node, string Kind, string Name, IReadOnlyList<string> Words);
 
-    private sealed class Problem(string message) : Exception(message);
+    // A raw problem is reported under its own name rather than as "starforge-unsupported:*".
+    private sealed class Problem(string message, bool raw = false) : Exception(message)
+    {
+        public bool Raw => raw;
+    }
 
     // The CICS statement for one EXEC CICS block plus the DFHRESP/DFHVALUE values inside it. Links receives the
     // programs a LINK binds, which the caller exports as CICS_LINK dependencies.
@@ -89,11 +101,13 @@ internal sealed partial class NativeCics
                 throw new Problem("tokens");
             }
 
-            return Build(exec, block, tokens[blockToken].Start, x, verb, unit, links);
+            var built = Build(exec, block, tokens[blockToken].Start, x, verb, unit, links);
+            _built[exec] = built[0];
+            return built;
         }
         catch (Problem problem)
         {
-            diagnostics.Add($"starforge-unsupported:cics:{verb}:{problem.Message}");
+            diagnostics.Add(problem.Raw ? problem.Message : $"starforge-unsupported:cics:{verb}:{problem.Message}");
             return [];
         }
     }
@@ -220,6 +234,8 @@ internal sealed partial class NativeCics
             links.Add(linked);
         }
 
+        links.AddRange(command.Started);
+
         var last = x[end - 1];
         var statementStart = blockStart + x[2].Start;
         var syntax = _data.Roots.Root(root, statementStart, blockStart + last.End, "cics:" + verb);
@@ -266,6 +282,9 @@ internal sealed partial class NativeCics
     private sealed record Command(string Verb, List<string> Names, List<Option> Options, ProgramUnit Unit, ExecStatementSyntax Exec)
     {
         public string? Link { get; set; }
+
+        // Programs a RUN TRANSID starts, exported like LINK targets.
+        public List<string> Started { get; } = [];
 
         public List<Option> All(string name) => Options.Where(o => o.Name == name).ToList();
 
@@ -367,7 +386,12 @@ internal sealed partial class NativeCics
                 yield return Transaction(command);
                 break;
             case "RUN":
-                throw new Problem("run");
+                foreach (var binding in Started(command))
+                {
+                    yield return binding;
+                }
+
+                break;
         }
     }
 
@@ -472,15 +496,7 @@ internal sealed partial class NativeCics
         };
         var definition = _data.Entry(item) ?? throw new Problem("constant:" + operand);
         var ancestors = item.Ancestors().Reverse().Select(_data.Entry).ToList();
-        var text = string.Concat(Words(definition));
-        var declaration = Regex.Match(
-            text,
-            "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(operand) + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]?)\)VALUE(?:IS)?(['"])([A-Za-z0-9@$#_-]+)( *)\3\.$""",
-            RegexOptions.IgnoreCase);
-        if (!declaration.Success || declaration.Groups[4].Value != constant.TrimEnd(' ')
-            || declaration.Groups[4].Length < minimum || declaration.Groups[4].Length > maximum
-            || declaration.Groups[4].Length + declaration.Groups[5].Length > int.Parse(declaration.Groups[2].Value)
-            || ancestors.Any(a => a is null || !Regex.IsMatch(string.Concat(Words(a)), @"^(0?[1-9]|[1-4][0-9])[A-Za-z][A-Za-z0-9-]*\.$")))
+        if (!ConstantShape(string.Concat(Words(definition)), ancestors.Select(a => a is null ? null : string.Concat(Words(a))), operand, constant, minimum, maximum))
         {
             throw new Problem("constant-shape:" + operand);
         }
@@ -493,6 +509,53 @@ internal sealed partial class NativeCics
             ["ancestorSyntax"] = new JsonArray(ancestors.Select(a => (JsonNode)a!).ToArray()),
             ["usageProof"] = "single-native-program:read-only-constant-references",
         });
+    }
+
+    // CALL identifier: the same read-only constant proof the gate re-derives for CICS program operands.
+    public (string Value, JsonObject Proof)? CallConstant(ProgramUnit unit, string operand)
+    {
+        try
+        {
+            return Constant(unit, operand, 1, 8);
+        }
+        catch (Problem)
+        {
+            return null;
+        }
+    }
+
+    // The value Constant proves, checked on the entry tokens alone so no syntax root is built.
+    private string? ConstantValue(ProgramUnit unit, string operand, int minimum, int maximum)
+    {
+        var key = (unit, operand.ToUpperInvariant(), minimum, maximum);
+        if (_constantValues.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        _constantValues[key] = null;
+        if (_data.Constant(unit, operand, callTargets: true, NameOptions, readStatements: true) is not { } found
+            || found.Item is not { } item
+            || item.Section is not (DataSectionKind.WorkingStorage or DataSectionKind.LocalStorage)
+            || _data.EntryText(item) is not { } text
+            || !ConstantShape(text, item.Ancestors().Reverse().Select(_data.EntryText), operand, found.Value, minimum, maximum))
+        {
+            return null;
+        }
+
+        return _constantValues[key] = found.Value.TrimEnd(' ');
+    }
+
+    private static bool ConstantShape(string text, IEnumerable<string?> ancestors, string operand, string constant, int minimum, int maximum)
+    {
+        var declaration = Regex.Match(
+            text,
+            "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(operand) + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]?)\)VALUE(?:IS)?(['"])([A-Za-z0-9@$#_-]+)( *)\3\.$""",
+            RegexOptions.IgnoreCase);
+        return declaration.Success && declaration.Groups[4].Value == constant.TrimEnd(' ')
+            && declaration.Groups[4].Length >= minimum && declaration.Groups[4].Length <= maximum
+            && declaration.Groups[4].Length + declaration.Groups[5].Length <= int.Parse(declaration.Groups[2].Value)
+            && ancestors.All(a => a is not null && Regex.IsMatch(a, @"^(0?[1-9]|[1-4][0-9])[A-Za-z][A-Za-z0-9-]*\.$"));
     }
 
     private static IEnumerable<string> Words(JsonNode? node)
@@ -797,6 +860,13 @@ internal sealed partial class NativeCics
     private JsonObject Transaction(Command command)
     {
         var (name, proof) = Name(command, command.Single("TRANSID"), 4, 4);
+        var binding = Transaction(name, proof);
+        binding["controlEffect"] = "transaction-continuation";
+        return binding;
+    }
+
+    private JsonObject Transaction(string name, JsonObject proof)
+    {
         var definition = _catalog.Find("TRANSACTION", name) ?? throw new Problem("transaction-definition:" + name);
         if (definition["PROGRAM"] is not { } program || definition["DYNAMIC"] != "NO" || definition["ROUTABLE"] != "NO"
             || definition["STATUS"] != "ENABLED")
@@ -819,7 +889,6 @@ internal sealed partial class NativeCics
             },
             ["programBinding"] = Program(program.ToUpperInvariant()),
             ["targetResolution"] = proof,
-            ["controlEffect"] = "transaction-continuation",
         };
     }
 

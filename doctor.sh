@@ -3436,6 +3436,9 @@ starforge_export_dependencies() {
     [[ -z "$vsam_definitions" ]] || profile_args+=(--vsam-definitions "$vsam_definitions")
     [[ -z "${REKT_SQL_DECLARATIONS:-}" ]] || profile_args+=(--sql-declarations "$(starforge_host_paths "$REKT_SQL_DECLARATIONS")")
     [[ -z "${REKT_PLATFORM_CONTRACTS:-}" ]] || profile_args+=(--platform-contracts "$(rekt_platform_contracts_for "$estate" host)")
+    if [[ "${rekt_commarea_pass:-false}" == true && -f "$REPO_ROOT/output/rekt/$estate/.commarea-closure.json" ]]; then
+        profile_args+=(--commarea-closure "$REPO_ROOT/output/rekt/$estate/.commarea-closure.json")
+    fi
     if lma_cli rekt-evidence dependency-search-view \
         --staging-root "$estate_staging" --relative-path "$rel_program" 2>>"$err_log"; then
         [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies (Starforge): $rel_program"

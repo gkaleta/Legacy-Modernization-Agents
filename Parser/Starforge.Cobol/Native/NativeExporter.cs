@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Starforge.Cobol.Copy;
 using Starforge.Cobol.Exec;
 using Starforge.Cobol.Lexing;
@@ -13,6 +14,7 @@ namespace Starforge.Cobol.Native;
 // IDCAMS steps define the clusters behind CICS files. SqlDeclarations are members holding DECLARE TABLE
 // statements the programs use without INCLUDE-ing them. PlatformContracts is the platform replacement profile the
 // staged DFHAID/DFHBMSCA projections were generated from; without it the projection's own sidecar names it.
+// CommareaClosure is the estate's COMMAREA closure, built from every program's commareaInventory.
 public sealed record NativeExportOptions(
     string ProgramPath,
     string CopybookRoot,
@@ -20,7 +22,8 @@ public sealed record NativeExportOptions(
     IReadOnlyList<string>? CicsDefinitions = null,
     IReadOnlyList<string>? VsamDefinitions = null,
     IReadOnlyList<string>? SqlDeclarations = null,
-    string? PlatformContracts = null);
+    string? PlatformContracts = null,
+    string? CommareaClosure = null);
 
 // Writes the native dependency contract the dependency evidence gate verifies, from Starforge's own parse.
 // Statement and definition trees are Starforge nodes with source ranges; a construct this exporter cannot
@@ -48,7 +51,8 @@ public static class NativeExporter
         var sql = SqlCatalog.Load(frontEnd, options.SqlDeclarations ?? []);
         var layouts = BmsLayouts.Load(options.CopybookRoot);
         var platform = options.PlatformContracts is { Length: > 0 } contracts ? Path.GetFullPath(contracts) : null;
-        var exporter = new Run(frontEnd, profile, Path.GetDirectoryName(program)!, catalog, vsam, sql, layouts, platform);
+        var closure = options.CommareaClosure is { Length: > 0 } c ? Path.GetFullPath(c) : null;
+        var exporter = new Run(frontEnd, profile, Path.GetDirectoryName(program)!, catalog, vsam, sql, layouts, platform, closure);
         return exporter.Program(program, Path.GetFileName(program), "PROGRAM", new HashSet<string>(StringComparer.Ordinal));
     }
 
@@ -71,7 +75,8 @@ public static class NativeExporter
     }
 
     private sealed class Run(
-        CobolFrontEnd frontEnd, Profile? profile, string searchView, CicsCatalog catalog, VsamCatalog vsam, SqlCatalog sqlCatalog, BmsLayouts layouts, string? platformContracts)
+        CobolFrontEnd frontEnd, Profile? profile, string searchView, CicsCatalog catalog, VsamCatalog vsam, SqlCatalog sqlCatalog, BmsLayouts layouts, string? platformContracts,
+        string? commareaClosure)
     {
         private string? Source(string name) =>
             Directory.EnumerateFiles(searchView)
@@ -86,7 +91,8 @@ public static class NativeExporter
             var result = frontEnd.Process(path);
             var roots = new SyntaxRoots(result);
             var data = new NativeData(result, roots);
-            var cics = new NativeCics(data, catalog, vsam, layouts, n => Source(n) is { } found ? Path.GetFullPath(found) : null);
+            var cics = new NativeCics(
+                data, catalog, vsam, layouts, n => Source(n) is { } found ? Path.GetFullPath(found) : null, commareaClosure, NativeSyntax.FileSha256(path));
             var sql = new NativeSql(data, sqlCatalog, profile?.Sql);
             var diagnostics = new List<string>();
             var statements = new JsonArray();
@@ -134,7 +140,7 @@ public static class NativeExporter
 
                             break;
                         case CallStatement call:
-                            if (Call(call, active, diagnostics) is { } child && seen.Add("CALL:" + child["callTarget"]!["name"]))
+                            if (Call(call, units[u], cics, data, active, diagnostics) is { } child && seen.Add("CALL:" + child["callTarget"]!["name"]))
                             {
                                 children.Add(child);
                             }
@@ -165,12 +171,14 @@ public static class NativeExporter
                 }
             }
 
+            var inventory = cics.Inventory();
             diagnostics.AddRange(roots.Problems);
             active.Remove(path);
-            return Document(path, name, kind, children, statements, diagnostics.Distinct(StringComparer.Ordinal).ToList(), fileIo);
+            return Document(path, name, kind, children, statements, inventory, diagnostics.Distinct(StringComparer.Ordinal).ToList(), fileIo);
         }
 
-        private JsonObject Document(string path, string name, string kind, List<JsonObject> children, JsonArray statements, List<string> diagnostics, bool fileIo)
+        private JsonObject Document(
+            string path, string name, string kind, List<JsonObject> children, JsonArray statements, JsonObject inventory, List<string> diagnostics, bool fileIo)
         {
             var list = statements.OfType<JsonObject>().ToList();
             var presence = new JsonObject();
@@ -240,13 +248,7 @@ public static class NativeExporter
                 ["dependencyDiagnostics"] = new JsonArray(diagnostics.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
                 ["dependencyControlTransfers"] = new JsonArray(),
                 ["dependencyDialectStatements"] = statements,
-                ["commareaInventory"] = new JsonObject
-                {
-                    ["schema"] = 1,
-                    ["records"] = new JsonArray(),
-                    ["carriers"] = new JsonArray(),
-                    ["sends"] = new JsonArray(),
-                },
+                ["commareaInventory"] = inventory,
                 ["dependencyDerivedInputs"] = DerivedInputs(children),
                 ["dependencyPresenceEvidence"] = presence,
                 ["dependencyAbsenceEvidence"] = absence,
@@ -372,12 +374,28 @@ public static class NativeExporter
                 : null;
         }
 
-        private JsonObject? Call(CallStatement call, HashSet<string> active, List<string> diagnostics)
+        private JsonObject? Call(CallStatement call, ProgramUnit unit, NativeCics cics, NativeData data, HashSet<string> active, List<string> diagnostics)
         {
-            if (call.Program is not { } literal)
+            JsonObject? resolution = null;
+            var literal = call.Program;
+            if (literal is null)
             {
-                diagnostics.Add($"dynamic-call-unsupported:{ProcedureText.Of(call.Target)}");
-                return null;
+                // A data-name operand counts only when it provably holds one documented runtime routine's name.
+                var operand = ProcedureText.Of(call.Target);
+                if (!Regex.IsMatch(operand, "^[A-Za-z][A-Za-z0-9-]*$") || cics.CallConstant(unit, operand) is not { } constant
+                    || profile?.Contracts[constant.Value.ToUpperInvariant()] is not JsonObject || Source(constant.Value) is not null)
+                {
+                    diagnostics.Add($"dynamic-call-unsupported:{operand}");
+                    return null;
+                }
+
+                literal = constant.Value;
+                resolution = new JsonObject
+                {
+                    ["operand"] = operand.ToUpperInvariant(),
+                    ["targetResolution"] = constant.Proof,
+                    ["callSyntax"] = data.Statement(call, "CallStatement"),
+                };
             }
 
             var name = literal.Trim('\'', '"').ToUpperInvariant();
@@ -408,6 +426,11 @@ public static class NativeExporter
                     ["runtimeMapping"] = "unverified",
                     ["resolutionKind"] = "documented-platform-contract",
                 };
+                if (resolution is not null)
+                {
+                    leaf["runtimeContract"]!["targetResolution"] = resolution;
+                }
+
                 return leaf;
             }
 

@@ -10,7 +10,7 @@ internal static class NativeExportCommand
 
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
-        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "platform-contracts", "out");
+        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "platform-contracts", "commarea-closure", "out");
         if (cmd.Positional.Count > 0)
         {
             throw new UsageException($"unexpected argument '{cmd.Positional[0]}'");
@@ -55,8 +55,16 @@ internal static class NativeExportCommand
             return 2;
         }
 
+        var closure = cmd.Single("commarea-closure");
+        if (closure is { Length: > 0 } && !File.Exists(closure))
+        {
+            stderr.WriteLine($"error: COMMAREA closure not found: {closure}");
+            return 2;
+        }
+
         var document = NativeExporter.Export(new NativeExportOptions(
-            program, copybooks, profile is { Length: > 0 } ? profile : null, cics, vsam, sql, platform is { Length: > 0 } ? platform : null));
+            program, copybooks, profile is { Length: > 0 } ? profile : null, cics, vsam, sql, platform is { Length: > 0 } ? platform : null,
+            closure is { Length: > 0 } ? closure : null));
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         File.WriteAllText(output, document.ToJsonString(Indented) + "\n");
         var diagnostics = document["dependencyDiagnostics"]!.AsArray();

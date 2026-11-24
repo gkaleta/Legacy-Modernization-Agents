@@ -95,6 +95,31 @@ internal sealed class NativeData
         return _roots.RootTokens(NativeSyntax.Node("DataEntry", children), span.FirstToken, span.EndToken, "data:" + item.DisplayName);
     }
 
+    // The entry's own tokens through its period, concatenated as the gate reads a DataEntry tree, without
+    // building a syntax root (roots report text a COPY REPLACING produced).
+    public string? EntryText(DataItem item)
+    {
+        var span = item.Entry.HeaderSpan;
+        return span.EndToken <= span.FirstToken ? null : Text(span.FirstToken, span.EndToken);
+    }
+
+    // A statement's tokens without the separator period, as the gate reads its syntax tree.
+    public List<string> StatementTokens(Statement statement) =>
+        Enumerable.Range(statement.Span.FirstToken, StatementEnd(statement) - statement.Span.FirstToken).Select(_roots.Tokens.Text).ToList();
+
+    public IReadOnlyList<ProgramUnit> Units() => _result.Syntax.AllPrograms().ToList();
+
+    public string Text(int first, int end)
+    {
+        var builder = new System.Text.StringBuilder();
+        for (var i = first; i < end; i++)
+        {
+            builder.Append(_roots.Tokens.Text(i));
+        }
+
+        return builder.ToString();
+    }
+
     // The entries from the 01 record down to the item, outermost first.
     public JsonArray? Path(DataItem item)
     {
@@ -173,6 +198,16 @@ internal sealed class NativeData
     // A procedure statement as a rooted tree of its own tokens; a separator period ending the sentence is not part of it.
     public JsonObject Statement(Statement statement, string kind)
     {
+        var end = StatementEnd(statement);
+        return _roots.RootTokens(NativeSyntax.Node(kind, Range(statement.Span.FirstToken, end)), statement.Span.FirstToken, end, "statement:" + kind);
+    }
+
+    // A phrase inside a statement (e.g. a PERFORM VARYING header) as a rooted tree of its tokens.
+    public JsonObject Phrase(int first, int end, string kind) =>
+        _roots.RootTokens(NativeSyntax.Node(kind, Range(first, end)), first, end, "phrase:" + kind);
+
+    private int StatementEnd(Statement statement)
+    {
         var tokens = _roots.Tokens;
         var end = statement.Span.EndToken;
         while (end > statement.Span.FirstToken + 1 && tokens[end - 1].Kind == TokenKind.Period)
@@ -180,7 +215,7 @@ internal sealed class NativeData
             end--;
         }
 
-        return _roots.RootTokens(NativeSyntax.Node(kind, Range(statement.Span.FirstToken, end)), statement.Span.FirstToken, end, "statement:" + kind);
+        return end;
     }
 
     // Storage two data items may share: the same record (through record REDEFINES) and overlapping bytes, an

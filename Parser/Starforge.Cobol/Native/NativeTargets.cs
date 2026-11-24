@@ -30,8 +30,20 @@ internal sealed partial class NativeCics
             }
             catch (Problem) when (effect == "transfer-control" && argument.Kind == Exec.ExecArgumentKind.DataRef && NameR().IsMatch(argument.Text))
             {
-                var (values, reaching) = FlowReaching(command, option, 1, 8);
-                (names, proof) = (values.Where(v => !string.IsNullOrEmpty(v)).Select(v => v!).ToList(), reaching);
+                try
+                {
+                    var (values, reaching) = FlowReaching(command, option, 1, 8);
+                    (names, proof) = (values.Where(v => !string.IsNullOrEmpty(v)).Select(v => v!).ToList(), reaching);
+                }
+                catch (Problem)
+                {
+                    if (SlotTargets(command, argument.Text, 1, 8) is not { } slot)
+                    {
+                        throw;
+                    }
+
+                    (names, proof) = slot;
+                }
             }
         }
 
