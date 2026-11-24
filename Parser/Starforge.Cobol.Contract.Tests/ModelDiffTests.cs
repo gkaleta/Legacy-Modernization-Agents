@@ -56,4 +56,45 @@ public sealed class ModelDiffTests : IDisposable
         File.ReadAllBytes(Path.Combine(perEstate, "model-diff.json"))
             .Should().Equal(File.ReadAllBytes(Path.Combine(parent, "model-diff.json")));
     }
+
+    // The REKT side shows its stored gate record; so does a PARSER_ENGINE=starforge tree given as --starforge-evidence.
+    [Theory]
+    [InlineData(true, "complete", 0, "evidence.coverage                matched=5 onlyStarforge=0 onlyRekt=0 mismatch=0")]
+    [InlineData(false, "partial", 0, "evidence.coverage                matched=0 onlyStarforge=0 onlyRekt=0 mismatch=5")]
+    [InlineData(true, "partial", 1, "evidence.coverage                matched=0 onlyStarforge=0 onlyRekt=0 mismatch=5")]
+    public async Task StarforgeEvidenceTreeIsComparedByItsStoredGateRecord(bool analysisComplete, string coverage, int exit, string tally)
+    {
+        var path = Path.Combine(_root, "alpha", "cobol", "ALPHA.cbl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, string.Join("\n",
+            A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. ALPHA."), A("PROCEDURE DIVISION."), B("GOBACK.")) + "\n");
+        var alpha = Path.Combine(_root, "alpha");
+        var emitDir = Path.Combine(_root, "emit");
+        CliApp.Run(["emit", "--source", alpha, "--out", emitDir], new StringWriter(), new StringWriter()).Should().Be(0);
+        static string Evidence(string status) =>
+            "{\"coverage\": {" + string.Join(", ", new[] { "CALL", "COPY", "EXEC_CICS", "EXEC_SQL", "FILE_IO" }.Select(k => $"\"{k}\": \"{status}\""))
+            + "}, \"definitions\": [], \"unresolvedDiagnostics\": []}";
+        var rekt = Path.Combine(_root, "rekt");
+        var evidenceTree = Path.Combine(_root, "starforge-run");
+        foreach (var file in Directory.EnumerateFiles(emitDir, "*", SearchOption.AllDirectories))
+        {
+            var copy = Path.Combine(rekt, Path.GetRelativePath(emitDir, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+            File.Copy(file, copy);
+        }
+
+        foreach (var (tree, status) in new[] { (rekt, "complete"), (evidenceTree, coverage) })
+        {
+            Directory.CreateDirectory(Path.Combine(tree, "alpha", "cobol", "ALPHA.cbl.report"));
+            File.WriteAllText(Path.Combine(tree, "alpha", "cobol", "ALPHA.cbl.report", "dependency-evidence.json"), Evidence(status));
+        }
+        File.WriteAllText(Path.Combine(evidenceTree, "alpha", "cobol", "ALPHA.cbl-deps.json"),
+            $"{{\"dependencyProducer\": \"starforge\", \"dependencyAnalysisComplete\": {(analysisComplete ? "true" : "false")}}}");
+
+        var result = await Diff("--rekt", rekt, "--starforge", emitDir, "--source", alpha, "--out", Path.Combine(_root, "out"),
+            "--starforge-evidence", evidenceTree);
+
+        result.Exit.Should().Be(exit, result.Err);
+        result.Out.Split('\n').Should().Contain(tally);
+    }
 }

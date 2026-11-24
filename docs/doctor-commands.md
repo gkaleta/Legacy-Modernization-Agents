@@ -134,7 +134,13 @@ cat output/rekt/missing-copybooks.txt # add these to source/ and run rekt-full a
 | `starforge` | Starforge, the .NET parser in `Parser/`, runs locally. No Docker and no Java for the parse; `rekt-full` still needs Docker for the Neo4j load. | `output/rekt/`, same layout and file names, so later stages run unchanged |
 | `both` | REKT as above, then Starforge for the same programs | REKT output in `output/rekt/`; Starforge output in `output/starforge/`; the comparison in `output/starforge-diff/model-diff.md` |
 
-Any other value stops the command with exit code 1. With `starforge`, each `*-deps.json` names `"dependencyProducer": "starforge"`. Starforge does not yet produce the native dependency contract that strict and `draft` conversion require, so the dependency evidence of every program is incomplete and whole-program conversion is blocked. Only the source-isolated `CONVERSION_DEPENDENCY_MODE=partial` mode converts, and it does not read parser evidence. Use `both` to keep REKT evidence for conversion while you compare the two parsers. The comparison is informational; a failed comparison does not fail the parse.
+Any other value stops the command with exit code 1. With `starforge`, each `*-deps.json` names `"dependencyProducer": "starforge"` and holds Starforge's own syntax nodes. Each node gives the file, line and column range it was parsed from and the SHA-256 of that text. The dependency evidence gate checks these against the source, using the same rules it applies to REKT output: source hashes, COPY and CALL resolution, presence and absence evidence, file bindings and runtime contracts. Strict and `draft` conversion therefore work with `starforge` for every program whose dependencies Starforge can prove:
+
+- COPY, static CALL and CALL targets documented in the target-port profile
+- batch file I/O (OPEN, READ, WRITE, REWRITE, DELETE, START, CLOSE) bound to its SELECT and FD
+- `EXEC CICS RETURN` without options
+
+Starforge does not yet export the other `EXEC CICS` commands, `EXEC SQL` or dynamic CALL. A program that uses them gets a `starforge-unsupported:*` or `dynamic-call-unsupported:*` diagnostic and stays blocked. In the sample estates, 20 of 73 programs are eligible with `starforge`; with `rekt`, all 73 are. Use `rekt` or `both` to convert CICS and SQL programs. The comparison in `both` is informational; a failed comparison does not fail the parse.
 
 ```bash
 PARSER_ENGINE=starforge ./doctor.sh rekt-parse   # parse without Docker

@@ -19,14 +19,19 @@ internal static class ArtifactDiff
     }
 
     // REKT's evidence is only verifiable in the staged frame it was produced in, so its stored record stands for what the gate saw.
-    public static void Evidence(Compare cmp, string sourceRoot, string rel, string rektRoot, string sfRoot)
+    // Likewise a PARSER_ENGINE=starforge output tree (sfEvidence) holds the record its gate wrote in its own staged frame.
+    public static void Evidence(Compare cmp, string sourceRoot, string rel, string rektRoot, string sfRoot, string? sfEvidence = null)
     {
         var stored = Path.Combine(rektRoot, rel + ".report", "dependency-evidence.json");
         var left = File.Exists(stored)
             ? JsonNode.Parse(File.ReadAllText(stored))!.AsObject()
             : RektEvidence.BuildEvidence(sourceRoot, rel, rektRoot, 0);
-        var right = RektEvidence.BuildEvidence(sourceRoot, rel, sfRoot, 0);
+        var sfStored = sfEvidence is null ? null : Path.Combine(sfEvidence, rel + ".report", "dependency-evidence.json");
+        var right = sfStored is not null && File.Exists(sfStored)
+            ? JsonNode.Parse(File.ReadAllText(sfStored))!.AsObject()
+            : RektEvidence.BuildEvidence(sourceRoot, rel, sfEvidence ?? sfRoot, 0, engine: NativeProducer.Starforge);
         cmp.Keyed("evidence.coverage", Members(left["coverage"]), Members(right["coverage"]));
+        cmp.Classifier.StarforgeDefinitions(cmp.Program, Definitions(right));
         cmp.Keyed("evidence.definitions", Definitions(left), Definitions(right));
         cmp.Keyed("evidence.diagnostics", Strings(left["unresolvedDiagnostics"]), Strings(right["unresolvedDiagnostics"]));
     }

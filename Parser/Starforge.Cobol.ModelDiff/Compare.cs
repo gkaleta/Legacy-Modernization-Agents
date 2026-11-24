@@ -5,6 +5,8 @@ internal sealed class Compare(DiffReport report, Classifier classifier, string p
 {
     public string Program { get; } = program;
 
+    public Classifier Classifier => classifier;
+
     // With presence off, keys on one side only are skipped: the category's presence is already counted elsewhere.
     public void Keyed(string category, IEnumerable<(string Key, string Value)> rekt, IEnumerable<(string Key, string Value)> starforge, bool presence = true)
     {

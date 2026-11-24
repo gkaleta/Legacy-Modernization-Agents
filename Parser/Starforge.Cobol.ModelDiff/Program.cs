@@ -6,13 +6,13 @@ namespace Starforge.Cobol.ModelDiff;
 
 internal static class Program
 {
-    private const string Usage = "usage: starforge-model-diff --rekt <dir> --starforge <dir> --source <dir>... --out <dir> [--program <rel>]...";
+    private const string Usage = "usage: starforge-model-diff --rekt <dir> --starforge <dir> --source <dir>... --out <dir> [--program <rel>]... [--starforge-evidence <dir>]";
 
     public static Task<int> Main(string[] args) => Run(args, Console.Out, Console.Error);
 
     public static async Task<int> Run(string[] args, TextWriter stdout, TextWriter stderr)
     {
-        string? rekt = null, starforge = null, outDir = null;
+        string? rekt = null, starforge = null, outDir = null, sfEvidence = null;
         var sources = new List<string>();
         var only = new List<string>();
         for (var i = 0; i < args.Length; i++)
@@ -25,6 +25,7 @@ internal static class Program
                 case "--source": sources.Add(value ?? ""); i++; break;
                 case "--out": outDir = value; i++; break;
                 case "--program": only.Add(value ?? ""); i++; break;
+                case "--starforge-evidence": sfEvidence = value; i++; break;
                 default:
                     stderr.WriteLine($"unknown argument: {args[i]}");
                     stderr.WriteLine(Usage);
@@ -42,6 +43,7 @@ internal static class Program
         starforge = Path.GetFullPath(starforge);
         sources = sources.Select(s => Path.GetFullPath(s).TrimEnd(Path.DirectorySeparatorChar)).ToList();
         outDir = Path.GetFullPath(outDir);
+        sfEvidence = sfEvidence is null ? null : Path.GetFullPath(sfEvidence);
         Directory.CreateDirectory(outDir);
 
         var programs = Programs(rekt).Where(p => only.Count == 0 || only.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
@@ -62,7 +64,7 @@ internal static class Program
         var rektBaseline = rekt;
         rekt = ParserMirror(rekt, Path.Combine(outDir, "rekt-parser"), programs);
         var report = new DiffReport { Programs = programs.Count };
-        var classifier = new Classifier(NativeUnclaimed(starforge, programs));
+        var classifier = new Classifier(sfEvidence is null ? NativeUnclaimed(starforge, programs) : NativeUnproven(sfEvidence, programs));
 
         var rektFacts = Path.Combine(outDir, "facts-rekt");
         var sfFacts = Path.Combine(outDir, "facts-starforge");
@@ -93,7 +95,7 @@ internal static class Program
             classifier.Begin(ProgramEvidence.Build(rel, rektContext, sfContext, Report(rekt, rel).Ast, Report(starforge, rel).Ast));
             ContextDiff.Run(cmp, rektContext, sfContext);
             ArtifactDiff.Deps(cmp, Path.Combine(rekt, rel + "-deps.json"), sfDeps, rel);
-            ArtifactDiff.Evidence(cmp, source, rel, rektBaseline, starforge);
+            ArtifactDiff.Evidence(cmp, source, rel, rektBaseline, starforge, sfEvidence);
             ArtifactDiff.Graph(cmp, rel, Report(rekt, rel), Report(starforge, rel));
 
             using var left = JsonDocument.Parse(File.ReadAllText(ProgramFactsArtifactLocator.GetFactsFilePath(rektFacts, rel)));
@@ -164,6 +166,30 @@ internal static class Program
             var root = doc.RootElement;
             if (!root.TryGetProperty("dependencyCoverage", out _)
                 && root.TryGetProperty("dependencyAnalysisComplete", out var complete) && complete.ValueKind == JsonValueKind.False)
+            {
+                result.Add(rel);
+            }
+        }
+
+        return result;
+    }
+
+    // With a PARSER_ENGINE=starforge output tree, the gap is narrower: programs whose native export names a construct
+    // the exporter cannot prove yet (the gate keeps those blocked).
+    private static HashSet<string> NativeUnproven(string evidenceTree, IEnumerable<string> programs)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rel in programs)
+        {
+            var path = Path.Combine(evidenceTree, rel + "-deps.json");
+            if (!File.Exists(path))
+            {
+                result.Add(rel);
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("dependencyAnalysisComplete", out var complete) || complete.ValueKind != JsonValueKind.True)
             {
                 result.Add(rel);
             }

@@ -12,6 +12,7 @@ public static class CliApp
           starforge diff-rekt --procedure --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt exec --source <estate-dir> [--source <estate-dir>...] --rekt-baseline <dir> --out <dir>
           starforge diff-rekt --model --rekt <rekt-baseline-dir> --starforge <emit-dir> --source <estate-dir>... --out <dir>
+            [--starforge-evidence <PARSER_ENGINE=starforge output/rekt>]
             (runs Parser/Starforge.Cobol.ModelDiff, which loads both trees through the application's own readers)
         """;
 

@@ -21,11 +21,13 @@ internal sealed partial class Classifier
     public const string RepCopybookOrder = "REPRESENTATION copybook-order";
     public const string RepDataOrder = "REPRESENTATION data-order-by-section";
     public const string GapNativeContract = "GAP native-dependency-contract";
+    public const string RepCallSiteDefinitions = "REPRESENTATION one-CALL-definition-per-call-site";
     public const string Derived = "DERIVED";
 
     private readonly HashSet<string> _nativeUnclaimed;
     private readonly Dictionary<(string Program, string Category), (int Explained, int Unexplained)> _stats = new();
     private ProgramEvidence? _evidence;
+    private (string Program, Dictionary<string, string> Definitions)? _starforgeDefinitions;
 
     // nativeUnclaimed: programs whose Starforge export declares no native dependency coverage, so the gate cannot verify them.
     public Classifier(HashSet<string> nativeUnclaimed)
@@ -34,6 +36,9 @@ internal sealed partial class Classifier
     }
 
     public void Begin(ProgramEvidence evidence) => _evidence = evidence;
+
+    public void StarforgeDefinitions(string program, IEnumerable<(string Key, string Value)> definitions) =>
+        _starforgeDefinitions = (program, definitions.GroupBy(d => d.Key).ToDictionary(g => g.Key, g => g.First().Value, StringComparer.Ordinal));
 
     public string Classify(string category, DiffKind kind, string program, string key, string? rekt, string? starforge)
     {
@@ -94,6 +99,11 @@ internal sealed partial class Classifier
             case "context.data-order" when e is not null:
                 return SectionOrder(e, rekt!, sf!) ? RepDataOrder : null;
 
+            // REKT exports an identical CALL child per CALL statement; Starforge exports one per callee with the same definition.
+            case "evidence.definitions" when kind == DiffKind.OnlyRekt && !_nativeUnclaimed.Contains(program)
+                && _starforgeDefinitions is { } defs && defs.Program == program && key.StartsWith("CALL ", StringComparison.Ordinal)
+                && Base(key) != key && defs.Definitions.GetValueOrDefault(Base(key)) == rekt:
+                return RepCallSiteDefinitions;
             case "evidence.coverage" or "evidence.definitions" or "evidence.diagnostics":
                 return _nativeUnclaimed.Contains(program) ? GapNativeContract : null;
 
