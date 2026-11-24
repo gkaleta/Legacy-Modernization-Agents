@@ -88,6 +88,9 @@ public sealed class CompilationResult
             .Select(p => p.Procedure?.Body)
             .Where(b => b is { IsEmpty: false })
             .Sum(b => Accounting.CountExpanded(Expanded.Text, b!.Value.Start, b.Value.End, cls));
+
+    // Later passes (EXEC, statement parsers) report here so one list holds every diagnostic of the program.
+    public void AddDiagnostics(IEnumerable<Diagnostic> diagnostics) => ((List<Diagnostic>)Diagnostics).AddRange(diagnostics);
 }
 
 // Thread-safe: one instance can process many programs in parallel and shares the copybook cache between them.

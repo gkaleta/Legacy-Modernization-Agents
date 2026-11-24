@@ -7,6 +7,7 @@ public static class CliApp
           starforge coverage --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rekt-baseline <dir>]
           starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>]
           starforge diff-rekt --layouts --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
+          starforge diff-rekt exec --source <estate-dir> [--source <estate-dir>...] --rekt-baseline <dir> --out <dir>
         """;
 
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
@@ -29,6 +30,7 @@ public static class CliApp
             {
                 "coverage" => CoverageCommand.Run(parsed, stdout, stderr),
                 "parse" => ParseCommand.Run(parsed, stdout, stderr),
+                "diff-rekt" when parsed.Positional is ["exec"] => ExecDiffCommand.Run(parsed, stdout, stderr),
                 "diff-rekt" => NotYet(stderr),
                 _ => UnknownCommand(args[0], stderr),
             };

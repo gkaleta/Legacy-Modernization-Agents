@@ -6,6 +6,7 @@ using System.Text.Json;
 using Starforge.Cobol.Copy;
 using Starforge.Cobol.Coverage;
 using Starforge.Cobol.Emit;
+using Starforge.Cobol.Exec;
 
 namespace Starforge.Cobol.Cli;
 
@@ -30,7 +31,8 @@ internal sealed record ProgramSummary(
     long ProcedureLexed = 0,
     IReadOnlyList<string>? ErrorNodes = null,
     int SyntaxPrograms = 0,
-    int DataItems = 0)
+    int DataItems = 0,
+    ExecTally? Exec = null)
 {
     public long Count(CoverageClass cls) => Characters.TryGetValue(cls, out var n) ? n : 0;
 
@@ -136,12 +138,13 @@ internal static class CoverageCommand
         try
         {
             var r = frontEnd.Process(path);
+            var exec = ExecPass.Run(r);
             var target = Path.Combine(outDir, "programs", name + ".json");
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             using (var stream = File.Create(target))
             using (var writer = new Utf8JsonWriter(stream, JsonReport.WriterOptions))
             {
-                JsonReport.WriteCoverage(writer, r, display);
+                JsonReport.WriteCoverage(writer, r, display, exec);
             }
 
             var diags = r.Diagnostics.Distinct().ToList();
@@ -167,7 +170,8 @@ internal static class CoverageCommand
                 r.CountInProcedureBodies(CoverageClass.Lexed),
                 errorNodes,
                 r.Programs.Count,
-                r.Programs.Sum(p => p.Items.Count))
+                r.Programs.Sum(p => p.Items.Count),
+                ExecTally.From(exec))
             {
                 SyntaxErrorCharacters = r.Coverage.ByReason.TryGetValue("Unsupported(syntax-error)", out var se) ? se : 0,
             };
@@ -279,6 +283,7 @@ internal static class CoverageCommand
         }
 
         w.WriteEndArray();
+        ExecSummaryReport.WriteJson(w, programs);
         rekt?.WriteJson(w);
         w.WriteEndObject();
     }
@@ -393,6 +398,7 @@ internal static class CoverageCommand
             sb.AppendLine($"| {p.Program} | {p.PhysicalLines} | {p.ExpandedPhysicalLines} | {p.Units} | {p.Tokens} | {p.Total} | {Pct(p.Count(CoverageClass.Parsed), p.Total)} | {Pct(p.Count(CoverageClass.Parsed), p.DivisionScope)} | {p.DataItems} | {p.ErrorNodeFingerprints.Count} | {Pct(p.Count(CoverageClass.Lexed), p.Total)} | {Pct(p.Count(CoverageClass.Comment), p.Total)} | {Pct(p.Count(CoverageClass.Unsupported), p.Total)} | {p.Count(CoverageClass.Unaccounted)} | {p.Errors} | {string.Join(", ", p.Unresolved)} |");
         }
 
+        sb.Append(ExecSummaryReport.Markdown(programs));
         if (rekt is not null)
         {
             sb.AppendLine();

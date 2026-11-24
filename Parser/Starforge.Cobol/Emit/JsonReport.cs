@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Starforge.Cobol.Copy;
 using Starforge.Cobol.Coverage;
+using Starforge.Cobol.Exec;
 using Starforge.Cobol.Lexing;
 using Starforge.Cobol.Source;
 
@@ -51,7 +52,7 @@ public static class JsonReport
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    public static void WriteCoverage(Utf8JsonWriter w, CompilationResult r, PathDisplay paths)
+    public static void WriteCoverage(Utf8JsonWriter w, CompilationResult r, PathDisplay paths, ExecPassResult? exec = null)
     {
         var cov = r.Coverage;
         w.WriteStartObject();
@@ -154,6 +155,11 @@ public static class JsonReport
         }
 
         w.WriteEndArray();
+        if (exec is not null)
+        {
+            ExecJson.Write(w, exec, paths);
+        }
+
         w.WriteEndObject();
     }
 
