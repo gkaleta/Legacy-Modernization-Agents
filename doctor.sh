@@ -280,6 +280,8 @@ show_usage() {
     echo
     echo -e "${BOLD}Cobol-REKT (deterministic static analysis):${NC}"
     echo -e "  ${GREEN}rekt-parse${NC}      Parse COBOL into ASTs/flowcharts under output/rekt/"
+    echo -e "                  ${CYAN}PARSER_ENGINE=rekt|starforge|both${NC} picks the parser (default rekt, the Java container);"
+    echo -e "                  starforge parses in-process without Docker, both also diffs it into output/starforge-diff/"
     echo -e "  ${GREEN}rekt-ingest${NC}     Load parsed artifacts into the REKT Neo4j graph"
     echo -e "  ${GREEN}rekt-full${NC}       Run parse then ingest"
     echo -e "                  ${CYAN}--parallel N${NC} parses N programs at once (1-16, default 1 or REKT_PARSE_JOBS)"
@@ -2631,6 +2633,9 @@ NEO4J_BOLT_PORT="$(resolve_runtime_setting NEO4J_BOLT_PORT 7687)"
 REKT_CONTAINER="$(resolve_runtime_setting REKT_CONTAINER cobol-rekt)"
 PORTAL_CONTAINER="$(resolve_runtime_setting PORTAL_CONTAINER cobol-migration-portal)"
 REKT_GENERATED_COPYBOOK_DIRS="$(resolve_runtime_setting REKT_GENERATED_COPYBOOK_DIRS copy-generated)"
+# rekt-parse runs the Java sidecar (rekt), the in-process .NET Starforge parser (starforge, no Docker),
+# or both: REKT's tree stays the one every later stage reads, and Starforge's is diffed against it.
+PARSER_ENGINE="$(resolve_runtime_setting PARSER_ENGINE rekt)"
 # The parser image tag is a digest of everything the Dockerfile builds from, so adding or
 # changing a patch selects a new image instead of reusing a stale parser.
 rekt_image_digest() {
@@ -2648,7 +2653,7 @@ REKT_IMAGE="$(resolve_runtime_setting REKT_IMAGE "rekt-oss-mma:$(rekt_image_dige
 # Contract profiles are bound into evidence by host path, so the parser sees them at that path.
 REKT_CONTRACTS_DIR="$REPO_ROOT/tools/cobol-rekt/contracts"
 export NEO4J_CONTAINER NEO4J_HTTP_PORT NEO4J_BOLT_PORT REKT_CONTAINER PORTAL_CONTAINER \
-    REKT_GENERATED_COPYBOOK_DIRS REKT_IMAGE REKT_CONTRACTS_DIR
+    REKT_GENERATED_COPYBOOK_DIRS REKT_IMAGE REKT_CONTRACTS_DIR PARSER_ENGINE
 # Optional dependency inputs preserve an explicitly empty shell override.
 if [[ "${REKT_CICS_RESOURCE_DEFINITIONS+x}" != x ]]; then
     configured_resources="$(read_local_config_value REKT_CICS_RESOURCE_DEFINITIONS)"
@@ -2857,6 +2862,38 @@ ensure_lma_cli() {
 lma_cli() {
     [[ -n "${_LMA_CLI_ASSEMBLY:-}" ]] || ensure_lma_cli || return 1
     lma_cli_run "$_LMA_CLI_ASSEMBLY" "$@"
+}
+
+validate_parser_engine() {
+    case "$PARSER_ENGINE" in
+        rekt|starforge|both) return 0 ;;
+    esac
+    echo -e "${RED}❌ PARSER_ENGINE must be rekt, starforge or both (got '$PARSER_ENGINE').${NC}" >&2
+    return 1
+}
+
+# Like ensure_lma_cli; STARFORGE_CLI_ASSEMBLY selects a prebuilt parser instead of a Release build.
+ensure_starforge_cli() {
+    [[ -n "${_STARFORGE_CLI_ASSEMBLY:-}" ]] && return 0
+    local assembly="${STARFORGE_CLI_ASSEMBLY:-}"
+    local project="$REPO_ROOT/Parser/Starforge.Cobol.Cli/Starforge.Cobol.Cli.csproj"
+    if [[ -z "$assembly" ]]; then
+        if ! "$DOTNET_CMD" build "$project" -c Release -v q -nologo >/dev/null 2>&1; then
+            echo -e "${RED}❌ Build failed. Run: dotnet build Parser/Starforge.Cobol.Cli -c Release${NC}" >&2
+            return 1
+        fi
+        assembly="$("$DOTNET_CMD" build "$project" -c Release -nologo -getProperty:TargetPath 2>/dev/null | tr -d '\r')"
+    fi
+    if [[ ! -f "$assembly" ]]; then
+        echo -e "${RED}❌ Starforge parser assembly not found: ${assembly:-unresolved}${NC}" >&2
+        return 1
+    fi
+    export _STARFORGE_CLI_ASSEMBLY="$assembly"
+}
+
+starforge_cli() {
+    [[ -n "${_STARFORGE_CLI_ASSEMBLY:-}" ]] || ensure_starforge_cli || return 1
+    lma_cli_run "$_STARFORGE_CLI_ASSEMBLY" "$@"
 }
 
 # Random version-4 UUID as 32 lowercase hex digits. Git Bash for Windows may lack
@@ -3331,6 +3368,91 @@ export_rekt_dependencies() {
     return "$export_status"
 }
 
+# One emit per estate, so each keeps its own copybooks, CICS definitions and platform contract.
+# Starforge reads source/ in place (no staging, no container); the tree is copied out per program.
+run_starforge_emit() {
+    local tree="$1" estate status=0
+    shift
+    rm -rf "$tree"
+    for estate in "$@"; do
+        echo -e "  ${BLUE}[$estate] Starforge: parsing in-process (no container)${NC}"
+        starforge_cli emit --source "$(rekt_estate_dir "$estate")" --out "$tree/$estate" || status=$?
+        # Exit 1 lists programs that threw; they fail on their own below, the rest still parse.
+        if (( status > 1 )); then
+            echo -e "${RED}❌ [$estate] Starforge emit failed (exit $status).${NC}" >&2
+            return 1
+        fi
+        status=0
+    done
+}
+
+# Starforge names a program <estate folder>/<path in estate>; doctor names it by its path in source/.
+starforge_place_report() {
+    local tree="$1" rel_program="$2" err_log="$3"
+    local estate estate_dir source_file from to
+    estate="$(rekt_estate_of "$rel_program")"
+    estate_dir="$(rekt_estate_dir "$estate")"
+    source_file="$REPO_ROOT/source/$rel_program"
+    from="$tree/$estate/$(basename "$estate_dir")/${source_file#"$estate_dir"/}"
+    to="$REPO_ROOT/output/rekt/$rel_program"
+    if [[ ! -f "$from-deps.json" ]]; then
+        echo "starforge: no output for $rel_program; see the emit errors above" >> "$err_log"
+        return 1
+    fi
+    if [[ -d "$to.report" ]]; then
+        echo -e "${RED}Refusing to replace unpreserved report: $to.report${NC}" >&2
+        return 1
+    fi
+    mkdir -p "$(dirname "$to")"
+    # Copied, not moved: the COMMAREA closure pass may place the same program again.
+    cp "$from-deps.json" "$to-deps.json" || return 1
+    [[ ! -d "$from.report" ]] || cp -R "$from.report" "$to.report" || return 1
+}
+
+# Same evidence step as export_rekt_dependencies, bound to source/ because Starforge parsed it in place.
+starforge_write_evidence() {
+    local rel_program="$1" export_status="$2"
+    local estate dependency_profile
+    estate="$(rekt_estate_of "$rel_program")"
+    dependency_profile="$(rekt_dependency_profile_for "$estate")"
+    (
+        if [[ "${REKT_PLATFORM_CONTRACTS+x}" == x ]]; then
+            export REKT_PLATFORM_CONTRACTS="$(rekt_platform_contracts_for "$estate" host)"
+        fi
+        if [[ -n "$dependency_profile" ]]; then
+            export REKT_DEPENDENCY_PROFILE="$dependency_profile"
+        fi
+        lma_cli_run "$_LMA_CLI_ASSEMBLY" rekt-evidence write \
+            --source-root "$REPO_ROOT/source" --relative-path "$rel_program" \
+            --parser-source-root "$REPO_ROOT/source" --output-root "$REPO_ROOT/output/rekt" \
+            --export-exit-code "$export_status"
+    ) || return 1
+    return "$export_status"
+}
+
+# PARSER_ENGINE=both: output/rekt stays REKT's; Starforge's tree goes to output/starforge and the
+# model diff (both trees through the application's own readers) to output/starforge-diff.
+run_starforge_comparison() {
+    local programs_file="$1" tree="$REPO_ROOT/output/starforge" report="$REPO_ROOT/output/starforge-diff"
+    local folder status=0
+    local -a sources=()
+    # The diff names programs <folder>/<path>, so loose programs at the source/ root are left out.
+    while IFS= read -r folder; do
+        sources+=(--source "$REPO_ROOT/source/$folder")
+    done < <(grep / "$programs_file" | cut -d/ -f1 | LC_ALL=C sort -u)
+    if [[ ${#sources[@]} -eq 0 ]]; then
+        echo -e "  ${YELLOW}⚠️  No program folders under source/ to compare; Starforge comparison skipped.${NC}"
+        return 0
+    fi
+    rm -rf "$tree" "$report"
+    echo -e "  ${BLUE}Starforge: parsing in-process → output/starforge/${NC}"
+    starforge_cli emit "${sources[@]}" --out "$tree" || status=$?
+    (( status <= 1 )) || return 1
+    echo -e "  ${BLUE}Model diff: REKT vs Starforge → output/starforge-diff/model-diff.md${NC}"
+    starforge_cli diff-rekt --model --rekt "$REPO_ROOT/output/rekt" --starforge "$tree" \
+        "${sources[@]}" --out "$report" || return 1
+}
+
 native_activity_program() {
     [[ -n "${_REKT_ACTIVITY_PATH:-}" ]] || return 0
     ensure_lma_cli || return 1
@@ -3414,6 +3536,7 @@ run_rekt_parse_impl() {
         2>/dev/null | wc -l | tr -d ' ')
 
     echo -e "${BLUE}  Found: ${cobol_count} programs, ${copy_count} copybooks${NC}"
+    echo -e "${BLUE}  Parser engine: ${PARSER_ENGINE} (PARSER_ENGINE)${NC}"
     if [[ -n "${_REKT_ACTIVITY_PATH:-}" && -z "${_REKT_PROGRAM_FILTER:-}" ]]; then
         lma_cli rekt-activity stage "$_REKT_ACTIVITY_PATH" \
             --stage "Native parsing" --expected-programs "$cobol_count" || return 1
@@ -3439,8 +3562,10 @@ run_rekt_parse_impl() {
 
     validate_rekt_jcl_source || return 1
     rekt_stage "Prepare sources (containers, preprocessing, staging)"
-    detect_docker_api_version
-    ensure_rekt_containers || return 1
+    if [[ "$PARSER_ENGINE" != starforge ]]; then
+        detect_docker_api_version
+        ensure_rekt_containers || return 1
+    fi
     ensure_lma_cli || return 1
 
     # Use the same exclusion policy for preprocessing, identity checks and staging.
@@ -3727,7 +3852,7 @@ run_rekt_parse_impl() {
     echo -e "  ${BLUE}Staged: ${staged_cbl} program(s), ${staged_cpy} copybook(s) → source/.rekt-staging/<estate>/${NC}"
 
     # Restart stale Docker Desktop bind mounts before they produce empty parser output.
-    if [[ "$staged_cbl" -gt 0 ]]; then
+    if [[ "$staged_cbl" -gt 0 && "$PARSER_ENGINE" != starforge ]]; then
         local staged_files staging_check
         staged_files=$(cd "$staging_base" && find . -type f -print) || return 1
         staging_check='while IFS= read -r path; do
@@ -3798,6 +3923,14 @@ run_rekt_parse_impl() {
     # Incremental scanning is opt-in to preserve full-scan behavior by default.
     local rekt_inc=false
     [[ "${_REKT_INCREMENTAL:-false}" == "true" ]] && rekt_inc=true
+    # The scan cache does not know which parser wrote a cached program, so switching engines rescans.
+    local output_engine=rekt engine_marker="$REPO_ROOT/output/rekt/.work/parser-engine" previous_engine
+    [[ "$PARSER_ENGINE" == starforge ]] && output_engine=starforge
+    previous_engine="$(cat "$engine_marker" 2>/dev/null || echo rekt)"
+    if [[ "$rekt_inc" == "true" && "$previous_engine" != "$output_engine" ]]; then
+        echo -e "  ${YELLOW}⚠️  output/rekt was parsed by $previous_engine; full scan with $output_engine.${NC}"
+        rekt_inc=false
+    fi
     if [[ "$rekt_inc" == "true" && -n "$duplicate_program_basenames" ]]; then
         echo -e "${RED}❌ _REKT_INCREMENTAL requires unique program basenames.${NC}"
         while IFS=$'\t' read -r issue basename path1 rest; do
@@ -3945,8 +4078,14 @@ run_rekt_parse_impl() {
             stub_warnings=$(lma_cli doctor-report stub-warnings "$cbl_file" "$generated_stubs_file")
         fi
 
+        # Starforge has no fallback modes: it parsed the whole estate up front, recovering per statement.
+        if [[ "$PARSER_ENGINE" == starforge ]]; then
+            if starforge_place_report "$starforge_tree" "$rel_program" "$err_log" \
+                && rekt_structure_written "$rel_program"; then
+                parse_outcome="Full"
+            fi
         # Attempt 1: Standard dialect (handles CICS, SQL, standard COBOL)
-        if run_rekt_logged "$err_log" container_exec "${platform_environment[@]}" "$REKT_CONTAINER" env REKT_ALLOW_MISSING_COPYBOOKS=true java -jar /app/smojol-cli.jar run "$fname" \
+        elif run_rekt_logged "$err_log" container_exec "${platform_environment[@]}" "$REKT_CONTAINER" env REKT_ALLOW_MISSING_COPYBOOKS=true java -jar /app/smojol-cli.jar run "$fname" \
             --commands="BUILD_BASE_ANALYSIS WRITE_FLOW_AST WRITE_CFG WRITE_DATA_STRUCTURES" \
             --srcDir="$parser_src_dir" --copyBooksDir="$parser_copybooks_dir" \
             --dialectJarPath=/app/dialect-idms.jar \
@@ -3985,7 +4124,11 @@ run_rekt_parse_impl() {
         # Dependency evidence is independent of structural success. Always export,
         # including recovered/raw/failed parses, and preserve the exporter diagnostics.
         local dep_ok=false
-        if export_rekt_dependencies "$rel_program" "$err_log" "/output/$report_work_rel"; then
+        if [[ "$PARSER_ENGINE" == starforge ]]; then
+            local starforge_export=0
+            [[ -f "$REPO_ROOT/output/rekt/${rel_program}-deps.json" ]] || starforge_export=1
+            starforge_write_evidence "$rel_program" "$starforge_export" && dep_ok=true
+        elif export_rekt_dependencies "$rel_program" "$err_log" "/output/$report_work_rel"; then
             dep_ok=true
         fi
         if [[ "$parse_outcome" == "Failed" ]]; then
@@ -4080,6 +4223,14 @@ run_rekt_parse_impl() {
 
     local parse_total=${#parse_queue[@]} parse_progress="$parse_results/progress-parse"
     mkdir -p "$parse_progress"
+    local starforge_tree="$REPO_ROOT/output/rekt/.work/starforge-$parser_run_identity"
+    if [[ "$PARSER_ENGINE" == starforge ]] && (( parse_total > 0 )); then
+        rekt_stage "Starforge parse (${#rekt_estates[@]} estate(s), in-process)"
+        ensure_starforge_cli && run_starforge_emit "$starforge_tree" "${rekt_estates[@]}" || {
+            rm -rf "$parse_results" "$starforge_tree"
+            return 1
+        }
+    fi
     if (( parse_jobs > 1 )); then
         rekt_stage "Parse programs ($parse_total, up to $parse_jobs at once — REKT_PARSE_JOBS)"
     else
@@ -4185,6 +4336,8 @@ run_rekt_parse_impl() {
     for estate in "${rekt_estates[@]}"; do
         rm -rf "$staging_base/$estate/.parser-input" "$staging_base/$estate/.dependency-input"
     done
+    rm -rf "$starforge_tree"
+    mkdir -p "$(dirname "$engine_marker")" && printf '%s\n' "$output_engine" > "$engine_marker"
 
     # Persist outcomes with one dotnet invocation per estate, against that estate's staging.
     if [[ -n "$rekt_manifest" ]]; then
@@ -4259,11 +4412,26 @@ run_rekt_parse_impl() {
 
     # Clean up staging dir — it lives inside source/ which is gitignored
     rm -rf "$staging_base"
-    rm -f "$shadowed_copybooks_file" "$rekt_programs_file" ${rekt_filter_file:+"$rekt_filter_file"}
+    rm -f "$shadowed_copybooks_file" ${rekt_filter_file:+"$rekt_filter_file"}
 
     rekt_stage "JCL scan"
-    scan_rekt_jcl || return 1
+    scan_rekt_jcl || { rm -f "$rekt_programs_file"; return 1; }
     rekt_stage_end
+
+    local starforge_comparison=""
+    if [[ "$PARSER_ENGINE" == both ]]; then
+        rekt_stage "Starforge comparison"
+        # Diagnostic only: REKT's output is already in place, so a failed comparison is reported, not fatal.
+        if run_starforge_comparison "$rekt_programs_file"; then
+            starforge_comparison="no unexplained differences"
+        elif [[ -f "$REPO_ROOT/output/starforge-diff/model-diff.md" ]]; then
+            starforge_comparison="unexplained differences found"
+        else
+            echo -e "  ${YELLOW}⚠️  Starforge comparison failed; REKT output is unaffected.${NC}"
+        fi
+        rekt_stage_end
+    fi
+    rm -f "$rekt_programs_file"
 
     echo -e "\n${GREEN}  Parsed: $succeeded succeeded ($skipped from cache), $failed failed${NC}"
     if [[ "$rekt_filter_active" == "true" && "$filtered_out" -gt 0 ]]; then
@@ -4291,6 +4459,9 @@ run_rekt_parse_impl() {
         echo -e "${YELLOW}  or reference missing copybooks. Check with: grep 'EXEC DLI' source/<file>${NC}"
     fi
     echo -e "${BLUE}  Output: output/rekt/${NC}"
+    if [[ -n "$starforge_comparison" ]]; then
+        echo -e "${BLUE}  Starforge comparison ($starforge_comparison): output/starforge-diff/model-diff.md${NC}"
+    fi
 }
 
 validate_rekt_jcl_source() {
@@ -5110,6 +5281,7 @@ main() {
             ;;
         "rekt"|"rekt-parse")
             validate_rekt_parse_jobs || exit 1
+            validate_parser_engine || exit 1
             run_rekt_parse
             ;;
         "rekt-ingest")
@@ -5117,6 +5289,7 @@ main() {
             ;;
         "rekt-full")
             validate_rekt_parse_jobs || exit 1
+            validate_parser_engine || exit 1
             run_rekt_full
             ;;
         "rekt-status")
