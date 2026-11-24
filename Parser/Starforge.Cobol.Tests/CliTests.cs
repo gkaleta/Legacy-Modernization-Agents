@@ -99,6 +99,38 @@ public sealed class CliTests
     }
 
     [Fact]
+    public void DiffRektModelAcceptsOneSourcePerEstate()
+    {
+        using var estate = new TestEstate();
+        foreach (var name in new[] { "ALPHA", "BETA" })
+        {
+            estate.Write($"{name.ToLowerInvariant()}/cobol/{name}.cbl",
+                A("IDENTIFICATION DIVISION."),
+                A($"PROGRAM-ID. {name}."),
+                A("PROCEDURE DIVISION."),
+                B("GOBACK."));
+        }
+
+        var alpha = Path.Combine(estate.Root, "alpha");
+        var beta = Path.Combine(estate.Root, "beta");
+        var emitDir = Path.Combine(estate.Root, "emit");
+        Run("emit", "--source", alpha, "--source", beta, "--out", emitDir).Exit.Should().Be(0);
+        var perEstate = Path.Combine(estate.Root, "per-estate");
+        var parent = Path.Combine(estate.Root, "parent");
+
+        var multi = Run("diff-rekt", "--model", "--rekt", emitDir, "--starforge", emitDir,
+            "--source", alpha, "--source", beta, "--out", perEstate);
+        var single = Run("diff-rekt", "--model", "--rekt", emitDir, "--starforge", emitDir,
+            "--source", estate.Root, "--out", parent);
+
+        multi.Exit.Should().Be(0, multi.Err);
+        single.Exit.Should().Be(0, single.Err);
+        multi.Out.Should().StartWith("programs=2 unexplained=0\n");
+        File.ReadAllBytes(Path.Combine(perEstate, "model-diff.json"))
+            .Should().Equal(File.ReadAllBytes(Path.Combine(parent, "model-diff.json")));
+    }
+
+    [Fact]
     public void EmitRejectsAPositionalArgument()
     {
         var (exit, _, stderr) = Run("emit", "estate", "--out", "x");

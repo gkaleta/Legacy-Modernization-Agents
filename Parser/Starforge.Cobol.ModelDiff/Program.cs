@@ -6,11 +6,12 @@ namespace Starforge.Cobol.ModelDiff;
 
 internal static class Program
 {
-    private const string Usage = "usage: starforge-model-diff --rekt <dir> --starforge <dir> --source <dir> --out <dir> [--program <rel>]...";
+    private const string Usage = "usage: starforge-model-diff --rekt <dir> --starforge <dir> --source <dir>... --out <dir> [--program <rel>]...";
 
     public static async Task<int> Main(string[] args)
     {
-        string? rekt = null, starforge = null, source = null, outDir = null;
+        string? rekt = null, starforge = null, outDir = null;
+        var sources = new List<string>();
         var only = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
@@ -19,7 +20,7 @@ internal static class Program
             {
                 case "--rekt": rekt = value; i++; break;
                 case "--starforge": starforge = value; i++; break;
-                case "--source": source = value; i++; break;
+                case "--source": sources.Add(value ?? ""); i++; break;
                 case "--out": outDir = value; i++; break;
                 case "--program": only.Add(value ?? ""); i++; break;
                 default:
@@ -29,7 +30,7 @@ internal static class Program
             }
         }
 
-        if (rekt is null || starforge is null || source is null || outDir is null)
+        if (rekt is null || starforge is null || sources.Count == 0 || outDir is null)
         {
             Console.Error.WriteLine(Usage);
             return 2;
@@ -37,25 +38,39 @@ internal static class Program
 
         rekt = Path.GetFullPath(rekt);
         starforge = Path.GetFullPath(starforge);
-        source = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar);
+        sources = sources.Select(s => Path.GetFullPath(s).TrimEnd(Path.DirectorySeparatorChar)).ToList();
         outDir = Path.GetFullPath(outDir);
-        var repoRoot = Path.GetDirectoryName(source)!;
-        var sourceFolder = Path.GetFileName(source);
         Directory.CreateDirectory(outDir);
 
         var programs = Programs(rekt).Where(p => only.Count == 0 || only.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var rootOf = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var rel in programs)
+        {
+            if (SourceRoot(sources, rel) is not { } root)
+            {
+                Console.Error.WriteLine($"error: {rel} is not found under any --source");
+                return 2;
+            }
+
+            rootOf[rel] = root;
+        }
+
         // The baseline also holds pipeline outputs (dependency-evidence.json, .commarea-closure.json, *.facts.json);
         // comparing only parser artefacts keeps both sides on the same footing.
         rekt = ParserMirror(rekt, Path.Combine(outDir, "rekt-parser"), programs);
         var report = new DiffReport { Programs = programs.Count };
         var classifier = new Classifier(CsdRuns(rekt, starforge, programs));
 
-        var rektLoader = new RektContextLoader(repoRoot, rekt);
-        var sfLoader = new RektContextLoader(repoRoot, starforge);
         var rektFacts = Path.Combine(outDir, "facts-rekt");
         var sfFacts = Path.Combine(outDir, "facts-starforge");
-        await new ProgramFactsExtractor(repoRoot, source, rekt).ExtractAllAsync(programs, rektFacts);
-        await new ProgramFactsExtractor(repoRoot, source, starforge).ExtractAllAsync(programs, sfFacts);
+        var loaders = new Dictionary<string, (RektContextLoader Rekt, RektContextLoader Starforge)>(StringComparer.Ordinal);
+        foreach (var group in programs.GroupBy(rel => rootOf[rel], StringComparer.Ordinal))
+        {
+            var repoRoot = Path.GetDirectoryName(group.Key)!;
+            loaders[group.Key] = (new RektContextLoader(repoRoot, rekt), new RektContextLoader(repoRoot, starforge));
+            await new ProgramFactsExtractor(repoRoot, group.Key, rekt).ExtractAllAsync(group.ToList(), rektFacts);
+            await new ProgramFactsExtractor(repoRoot, group.Key, starforge).ExtractAllAsync(group.ToList(), sfFacts);
+        }
 
         foreach (var rel in programs)
         {
@@ -68,8 +83,10 @@ internal static class Program
             }
 
             report["programs"].Match();
-            var rektContext = rektLoader.Load(rel, sourceFolder);
-            var sfContext = sfLoader.Load(rel, sourceFolder);
+            var source = rootOf[rel];
+            var (rektLoader, sfLoader) = loaders[source];
+            var rektContext = rektLoader.Load(rel, Path.GetFileName(source));
+            var sfContext = sfLoader.Load(rel, Path.GetFileName(source));
             classifier.Begin(ProgramEvidence.Build(rel, rektContext, sfContext, Report(rekt, rel).Ast, Report(starforge, rel).Ast));
             ContextDiff.Run(cmp, rektContext, sfContext);
             ArtifactDiff.Deps(cmp, Path.Combine(rekt, rel + "-deps.json"), sfDeps, rel);
@@ -105,6 +122,23 @@ internal static class Program
             .Where(p => !p.Split('/').Any(s => s.StartsWith('.') || s is "verification" or "llm-derived" || s.EndsWith(".report", StringComparison.Ordinal)))
             .Select(p => p[..^"-deps.json".Length])
             .Order(StringComparer.Ordinal);
+
+    // Program paths start with the estate name (as emit writes them), so an estate directory serves the programs named
+    // after it and any other --source must contain the path as given.
+    private static string? SourceRoot(IReadOnlyList<string> sources, string rel)
+    {
+        var estate = rel.Split('/')[0];
+        foreach (var source in sources)
+        {
+            var parent = Path.GetDirectoryName(source);
+            if (parent is not null && Path.GetFileName(source) == estate && File.Exists(Path.Combine(parent, rel)))
+            {
+                return parent;
+            }
+        }
+
+        return sources.FirstOrDefault(s => File.Exists(Path.Combine(s, rel)));
+    }
 
     private static (string? Ast, string? Cfg) Report(string root, string rel)
     {
