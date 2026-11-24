@@ -51,6 +51,63 @@ public sealed class CliTests
     }
 
     [Fact]
+    public void ParseReportsWarningsOnStderrAndInTheDiagnosticsArray()
+    {
+        using var estate = new TestEstate();
+        var program = estate.Write("MAIN.cbl", A("PROCEDURE DIVISION."), Indicator('Q', "    GOBACK."));
+
+        var (exit, stdout, stderr) = Run("parse", program);
+
+        var label = Path.GetFileName(estate.Root);
+        exit.Should().Be(0);
+        stderr.Should().Be(
+            $"{label}/MAIN.cbl:2:7-2:7: warning: invalid-indicator: Column 7 holds 'Q', which is not a valid indicator; the line is read as code\n" +
+            $"{label}/MAIN.cbl:1:8-1:16: warning: missing-identification-division: Program has no IDENTIFICATION DIVISION\n");
+        using var json = System.Text.Json.JsonDocument.Parse(stdout);
+        json.RootElement.GetProperty("diagnostics").EnumerateArray()
+            .Select(d => (d.GetProperty("code").GetString(), d.GetProperty("severity").GetString(), d.GetProperty("range").GetString()))
+            .Should().Equal(
+                ("missing-identification-division", "Warning", $"{label}/MAIN.cbl:1:8-1:16"),
+                ("invalid-indicator", "Warning", $"{label}/MAIN.cbl:2:7-2:7"));
+    }
+
+    [Fact]
+    public void EmitWritesTheReportTreeOfEveryProgram()
+    {
+        using var estate = new TestEstate();
+        estate.Write("cobol/MAIN.cbl",
+            A("IDENTIFICATION DIVISION."),
+            A("PROGRAM-ID. MAIN."),
+            A("PROCEDURE DIVISION."),
+            B("CALL 'SUB'."),
+            B("GOBACK."));
+        var outDir = Path.Combine(estate.Root, "out");
+        var label = Path.GetFileName(estate.Root);
+
+        var (exit, stdout, stderr) = Run("emit", "--source", estate.Root, "--out", outDir);
+
+        exit.Should().Be(0, stderr);
+        stdout.Should().StartWith("programs=1 files=4 exceptions=0 ");
+        Directory.GetFiles(outDir, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(outDir, f).Replace('\\', '/'))
+            .Order(StringComparer.Ordinal)
+            .Should().Equal(
+                $"{label}/cobol/MAIN.cbl-deps.json",
+                $"{label}/cobol/MAIN.cbl.report/cfg/cfg-MAIN.cbl.json",
+                $"{label}/cobol/MAIN.cbl.report/data_structures/MAIN.cbl-data.json",
+                $"{label}/cobol/MAIN.cbl.report/flow_ast/flow-ast-MAIN.cbl.json");
+    }
+
+    [Fact]
+    public void EmitRejectsAPositionalArgument()
+    {
+        var (exit, _, stderr) = Run("emit", "estate", "--out", "x");
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("unexpected argument 'estate' (repeat --source for each estate)");
+    }
+
+    [Fact]
     public void DiffRektWithoutAComparisonIsAUsageError()
     {
         var (exit, _, stderr) = Run("diff-rekt");
