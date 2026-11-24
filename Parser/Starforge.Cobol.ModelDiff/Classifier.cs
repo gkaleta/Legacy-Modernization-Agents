@@ -22,12 +22,14 @@ internal sealed partial class Classifier
     public const string RepDataOrder = "REPRESENTATION data-order-by-section";
     public const string GapNativeContract = "GAP native-dependency-contract";
     public const string RepCallSiteDefinitions = "REPRESENTATION one-CALL-definition-per-call-site";
+    public const string PrecisionReaching = "PRECISION reaching-assignments-subset-of-commarea-universe";
     public const string Derived = "DERIVED";
 
     private readonly HashSet<string> _nativeUnclaimed;
     private readonly Dictionary<(string Program, string Category), (int Explained, int Unexplained)> _stats = new();
     private ProgramEvidence? _evidence;
     private (string Program, Dictionary<string, string> Definitions)? _starforgeDefinitions;
+    private (string Program, HashSet<string> Names, bool Closed)? _narrowed;
 
     // nativeUnclaimed: programs whose Starforge export declares no native dependency coverage, so the gate cannot verify them.
     public Classifier(HashSet<string> nativeUnclaimed)
@@ -39,6 +41,9 @@ internal sealed partial class Classifier
 
     public void StarforgeDefinitions(string program, IEnumerable<(string Key, string Value)> definitions) =>
         _starforgeDefinitions = (program, definitions.GroupBy(d => d.Key).ToDictionary(g => g.Key, g => g.First().Value, StringComparer.Ordinal));
+
+    public void NarrowedTargets(string program, (HashSet<string> Names, bool Closed) narrowed) =>
+        _narrowed = (program, narrowed.Names, narrowed.Closed);
 
     public string Classify(string category, DiffKind kind, string program, string key, string? rekt, string? starforge)
     {
@@ -104,6 +109,13 @@ internal sealed partial class Classifier
                 && _starforgeDefinitions is { } defs && defs.Program == program && key.StartsWith("CALL ", StringComparison.Ordinal)
                 && Base(key) != key && defs.Definitions.GetValueOrDefault(Base(key)) == rekt:
                 return RepCallSiteDefinitions;
+            // Starforge proved a subset of REKT's slot universe from the reaching MOVEs, so REKT's extra targets (and the closure
+            // it needed for them) have no Starforge counterpart; both proofs are sound.
+            case "evidence.definitions" when kind == DiffKind.OnlyRekt && !_nativeUnclaimed.Contains(program)
+                && _narrowed is { } narrowed && narrowed.Program == program
+                && (key.Split(' ') is ["CICS_PROGRAM" or "CICS_CONTINUATION" or "CICS_CONTINUATION_SOURCE", var name] && narrowed.Names.Contains(Base(name))
+                    || key.StartsWith("COMMAREA_CLOSURE ", StringComparison.Ordinal) && narrowed.Closed && narrowed.Names.Count > 0):
+                return PrecisionReaching;
             case "evidence.coverage" or "evidence.definitions" or "evidence.diagnostics":
                 return _nativeUnclaimed.Contains(program) ? GapNativeContract : null;
 

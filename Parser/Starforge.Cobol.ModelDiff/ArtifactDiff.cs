@@ -36,6 +36,56 @@ internal static class ArtifactDiff
         cmp.Keyed("evidence.diagnostics", Strings(left["unresolvedDiagnostics"]), Strings(right["unresolvedDiagnostics"]));
     }
 
+    // Program names REKT bound only through its flow-insensitive COMMAREA slot universe for an operand that Starforge proved
+    // from the assignments reaching the command; Closed is true when Starforge needed no slot universe in this program at all.
+    public static (HashSet<string> Names, bool Closed) NarrowedTargets(string rektDeps, string sfDeps)
+    {
+        var rekt = ProgramTargets(rektDeps);
+        var sf = ProgramTargets(sfDeps);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var closed = true;
+        foreach (var (operand, universe) in rekt.Where(t => t.Key.Kind == "closed-world-commarea-slot").Select(t => (t.Key.Operand, t.Value)))
+        {
+            var proven = sf.GetValueOrDefault(("structured-reaching-assignments", operand));
+            if (proven is null || sf.Keys.Any(k => k.Operand == operand && k.Kind != "structured-reaching-assignments") || !proven.IsSubsetOf(universe))
+            {
+                closed = false;
+                continue;
+            }
+
+            names.UnionWith(universe.Except(proven));
+        }
+
+        return (names, closed && sf.Keys.All(k => k.Kind != "closed-world-commarea-slot"));
+    }
+
+    private static Dictionary<(string Kind, string Operand), HashSet<string>> ProgramTargets(string deps)
+    {
+        var result = new Dictionary<(string, string), HashSet<string>>();
+        if (!File.Exists(deps) || JsonNode.Parse(File.ReadAllText(deps))?["dependencyDialectStatements"] is not JsonArray statements)
+        {
+            return result;
+        }
+
+        foreach (var binding in statements.SelectMany(s => s?["resourceBindings"] as JsonArray ?? []))
+        {
+            if ((string?)binding?["kind"] != "CICS_PROGRAM" || binding["targetResolution"] is not JsonObject resolution
+                || (string?)resolution["kind"] is not { } kind || (string?)resolution["operand"] is not { } operand)
+            {
+                continue;
+            }
+
+            if (!result.TryGetValue((kind, operand), out var names))
+            {
+                result[(kind, operand)] = names = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            names.Add((string)binding["name"]!);
+        }
+
+        return result;
+    }
+
     // Emulates the graph endpoints' Cypher over the rows GraphIngestion would write; other graph properties have no reader.
     public static void Graph(Compare cmp, string rel, (string? Ast, string? Cfg) rekt, (string? Ast, string? Cfg) sf)
     {

@@ -1,4 +1,5 @@
 using Starforge.Cobol.Cli;
+using Starforge.Cobol.ModelDiff;
 using ModelDiffProgram = Starforge.Cobol.ModelDiff.Program;
 
 namespace Starforge.Cobol.Contract.Tests;
@@ -96,5 +97,42 @@ public sealed class ModelDiffTests : IDisposable
 
         result.Exit.Should().Be(exit, result.Err);
         result.Out.Split('\n').Should().Contain(tally);
+    }
+
+    private string Deps(string name, params (string Program, string Kind)[] bindings)
+    {
+        var items = bindings.Select(b =>
+            $"{{\"kind\": \"CICS_PROGRAM\", \"name\": \"{b.Program}\", \"targetResolution\": {{\"kind\": \"{b.Kind}\", \"operand\": \"WS-NEXT\"}}}}");
+        var path = Path.Combine(_root, name + "-deps.json");
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(path, $"{{\"dependencyDialectStatements\": [{{\"operation\": \"XCTL\", \"resourceBindings\": [{string.Join(", ", items)}]}}]}}");
+        return path;
+    }
+
+    [Fact]
+    public void ReachingProofInsideTheSlotUniverseNarrowsRektsExtraTargets()
+    {
+        const string slot = "closed-world-commarea-slot";
+        const string reaching = "structured-reaching-assignments";
+        var rekt = Deps("rekt", ("PGMA", slot), ("PGMB", slot), ("PGMC", slot));
+
+        var (names, closed) = ArtifactDiff.NarrowedTargets(rekt, Deps("sf", ("PGMA", reaching)));
+
+        names.Order(StringComparer.Ordinal).Should().Equal("PGMB", "PGMC");
+        closed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ReachingProofOutsideTheSlotUniverseNarrowsNothing()
+    {
+        const string slot = "closed-world-commarea-slot";
+        var rekt = Deps("rekt", ("PGMA", slot), ("PGMB", slot));
+
+        var sf = Deps("sf", ("PGMA", "structured-reaching-assignments"), ("PGMZ", "structured-reaching-assignments"));
+
+        var (names, closed) = ArtifactDiff.NarrowedTargets(rekt, sf);
+
+        names.Should().BeEmpty();
+        closed.Should().BeFalse();
     }
 }

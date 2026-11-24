@@ -95,6 +95,12 @@ internal static class Program
             classifier.Begin(ProgramEvidence.Build(rel, rektContext, sfContext, Report(rekt, rel).Ast, Report(starforge, rel).Ast));
             ContextDiff.Run(cmp, rektContext, sfContext);
             ArtifactDiff.Deps(cmp, Path.Combine(rekt, rel + "-deps.json"), sfDeps, rel);
+            if (sfEvidence is not null)
+            {
+                classifier.NarrowedTargets(rel, ArtifactDiff.NarrowedTargets(Path.Combine(rektBaseline, rel + "-deps.json"),
+                    Path.Combine(sfEvidence, rel + "-deps.json")));
+            }
+
             ArtifactDiff.Evidence(cmp, source, rel, rektBaseline, starforge, sfEvidence);
             ArtifactDiff.Graph(cmp, rel, Report(rekt, rel), Report(starforge, rel));
 
