@@ -1,6 +1,6 @@
 # doctor.sh command reference
 
-**Last updated**: 2026-11-18
+**Last updated**: 2026-11-24
 
 **Always use `./doctor.sh run` to run migrations, not `dotnet run` directly.**
 
@@ -123,6 +123,23 @@ cat output/rekt/missing-copybooks.txt # add these to source/ and run rekt-full a
 > When programs sit in only one top-level folder (a layout such as `source/cbl/`, `source/cpy/` and `source/jcl/`), all of `source/` is one estate, and programs find copybooks in the sibling folders. If `source/` holds several estates and a top-level folder has copybooks or BMS maps but no programs, the parse warns that no estate reads it; move it into the estate folder that uses it.
 >
 > In Estate Mission Control, a JCL job in a folder without programs (such as `source/jcl/`) is shown in the estate of the programs it runs.
+
+### Parser engine: PARSER_ENGINE
+
+`PARSER_ENGINE` selects the parser that `rekt-parse` and `rekt-full` run. Set it in the shell or in `Config/ai-config.local.env`; the shell value wins.
+
+| Value | Parse step | Output |
+|---|---|---|
+| `rekt` (default) | REKT parser in the `cobol-rekt` container (Docker, Java) | `output/rekt/` |
+| `starforge` | Starforge, the .NET parser in `Parser/`, runs locally. No Docker and no Java for the parse; `rekt-full` still needs Docker for the Neo4j load. | `output/rekt/`, same layout and file names, so later stages run unchanged |
+| `both` | REKT as above, then Starforge for the same programs | REKT output in `output/rekt/`; Starforge output in `output/starforge/`; the comparison in `output/starforge-diff/model-diff.md` |
+
+Any other value stops the command with exit code 1. With `starforge`, each `*-deps.json` names `"dependencyProducer": "starforge"`. Starforge does not yet produce the native dependency contract that strict and `draft` conversion require, so the dependency evidence of every program is incomplete and whole-program conversion is blocked. Only the source-isolated `CONVERSION_DEPENDENCY_MODE=partial` mode converts, and it does not read parser evidence. Use `both` to keep REKT evidence for conversion while you compare the two parsers. The comparison is informational; a failed comparison does not fail the parse.
+
+```bash
+PARSER_ENGINE=starforge ./doctor.sh rekt-parse   # parse without Docker
+PARSER_ENGINE=both ./doctor.sh rekt-full         # REKT parse + Starforge comparison, then ingest
+```
 
 Read the summary at the end before converting:
 

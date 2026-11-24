@@ -128,6 +128,7 @@ cp -r /path/to/your/cobol/* source/
 | `--parallel N` (or `REKT_PARSE_JOBS=N`) | Parse 1–16 programs at once. 2–4 is a good choice; allow about 1 GB of Docker memory per job. Results are identical to a sequential scan |
 | `./doctor.sh rekt-parse` / `rekt-ingest` | Run only the parse half or only the Neo4j load |
 | `./doctor.sh rekt-status` | Container, graph and export status |
+| `PARSER_ENGINE=starforge` / `both` | Parse with Starforge, the local .NET parser (no Docker for the parse), or run both parsers and compare them. Default `rekt`. See [Parser engine](docs/doctor-commands.md#parser-engine-parser_engine) |
 | `REKT_VERBOSE=true` | Also stream the parser's own output (normally kept in `output/rekt/**/*.parse.log`) |
 | `REKT_NO_BMS_MAPS=true` | Do not generate symbolic map copybooks from BMS mapsets |
 
