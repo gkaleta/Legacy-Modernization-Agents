@@ -38,6 +38,12 @@ public static partial class RektEvidence
             case JsonObject when SyntaxKeys.Contains(key):
                 errors.Add($"starforge-syntax-root-foreign:{key}");
                 return;
+            // An explicit SQL catalog binding's declaration lives in its own hash-bound catalog file, which the
+            // dialect statement check requires to be a configured declaration input.
+            case JsonObject obj when Str(obj, "definitionScope") == "explicit-sql-catalog" && Str(obj, "sourcePath") is { } catalog:
+                var withCatalog = new HashSet<string>(files, StringComparer.Ordinal) { PyCompat.Resolve(catalog) };
+                foreach (var (name, item) in obj) CheckRoots(name, item, withCatalog, root, texts, errors);
+                return;
             case JsonObject obj:
                 foreach (var (name, item) in obj) CheckRoots(name, item, files, root, texts, errors);
                 return;

@@ -3409,6 +3409,16 @@ starforge_place_report() {
     [[ ! -d "$from.report" ]] || cp -R "$from.report" "$to.report" || return 1
 }
 
+# Resource lists name container paths (/source/...); Starforge reads the same files from the host checkout.
+starforge_host_paths() {
+    local list="$1"
+    if [[ "$list" == /source/* ]]; then
+        printf '%s\n' "$REPO_ROOT${list//:\/source\//:$REPO_ROOT/source/}"
+    else
+        printf '%s\n' "$list"
+    fi
+}
+
 # The Starforge counterpart of export_rekt_dependencies: the same search view, staging and
 # contracts, but the native export comes from Starforge's own parse (host paths, no container).
 starforge_export_dependencies() {
@@ -3419,6 +3429,12 @@ starforge_export_dependencies() {
     local -a profile_args=()
     dependency_profile="$(rekt_dependency_profile_for "$estate")"
     [[ -z "$dependency_profile" ]] || profile_args=(--profile "$dependency_profile")
+    local cics_definitions vsam_definitions
+    cics_definitions="$(starforge_host_paths "$(rekt_cics_resources_for "$estate")")"
+    vsam_definitions="$(starforge_host_paths "$(rekt_vsam_definitions_for "$estate")")"
+    [[ -z "$cics_definitions" ]] || profile_args+=(--cics-definitions "$cics_definitions")
+    [[ -z "$vsam_definitions" ]] || profile_args+=(--vsam-definitions "$vsam_definitions")
+    [[ -z "${REKT_SQL_DECLARATIONS:-}" ]] || profile_args+=(--sql-declarations "$(starforge_host_paths "$REKT_SQL_DECLARATIONS")")
     if lma_cli rekt-evidence dependency-search-view \
         --staging-root "$estate_staging" --relative-path "$rel_program" 2>>"$err_log"; then
         [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies (Starforge): $rel_program"
@@ -3435,6 +3451,9 @@ starforge_export_dependencies() {
         fi
         if [[ -n "$dependency_profile" ]]; then
             export REKT_DEPENDENCY_PROFILE="$dependency_profile"
+        fi
+        if [[ "${REKT_SQL_DECLARATIONS+x}" == x ]]; then
+            export REKT_SQL_DECLARATIONS="$(starforge_host_paths "$REKT_SQL_DECLARATIONS")"
         fi
         lma_cli_run "$_LMA_CLI_ASSEMBLY" rekt-evidence write \
             --source-root "$REPO_ROOT/source" --relative-path "$rel_program" \

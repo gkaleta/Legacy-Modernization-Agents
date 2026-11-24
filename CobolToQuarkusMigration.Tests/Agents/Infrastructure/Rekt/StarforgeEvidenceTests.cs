@@ -40,15 +40,33 @@ public sealed class StarforgeEvidenceTests : RektEvidenceFixture
             + "       PROCEDURE DIVISION.\n           GOBACK.\n");
     }
 
-    private JsonObject Export()
+    private const string SqlProgram = """
+               IDENTIFICATION DIVISION.
+               PROGRAM-ID. PROG.
+               DATA DIVISION.
+               WORKING-STORAGE SECTION.
+               01 WS-ID PIC X(8).
+               PROCEDURE DIVISION.
+                   EXEC SQL DELETE FROM CONTROL WHERE ID = :WS-ID END-EXEC.
+                   GOBACK.
+        """;
+
+    private const string SqlCatalog = """
+                   EXEC SQL DECLARE CONTROL TABLE
+                   ( ID CHAR(8) NOT NULL )
+                   END-EXEC.
+        """;
+
+    private JsonObject Export(IReadOnlyList<string>? sqlDeclarations = null)
     {
-        var document = NativeExporter.Export(new NativeExportOptions(ProgramPath, Path.Join(Source, "estate")));
+        var document = NativeExporter.Export(new NativeExportOptions(ProgramPath, Path.Join(Source, "estate"),
+            SqlDeclarations: sqlDeclarations));
         Save(ExportPath, document);
         return document;
     }
 
-    private JsonObject Gate(string engine = NativeProducer.Starforge) =>
-        RektEvidence.BuildEvidence(Source, Relative, Output, 0, engine: engine);
+    private JsonObject Gate(string engine = NativeProducer.Starforge, string? sqlDeclarations = null) =>
+        RektEvidence.BuildEvidence(Source, Relative, Output, 0, sqlDeclarations: sqlDeclarations, engine: engine);
 
     private static List<string> Problems(JsonObject evidence) => Strings(evidence["unresolvedDiagnostics"]);
 
@@ -189,5 +207,44 @@ public sealed class StarforgeEvidenceTests : RektEvidenceFixture
         Save(ExportPath, document);
 
         Problems(Gate()).Should().Contain("starforge-syntax-root-foreign:syntax");
+    }
+
+    [Fact]
+    public void SqlRelationBoundToConfiguredCatalog_IsComplete()
+    {
+        Write("estate/PROG.cbl", SqlProgram + "\n");
+        var catalog = Write("sql/CONTROL.cpy", SqlCatalog + "\n");
+        var document = Export([catalog]);
+        var binding = Objects(FirstStatement(document, "DELETE")["resourceBindings"])
+            .Single(item => (string?)item["kind"] == "SQL_RELATION");
+
+        Strings(document["dependencyDiagnostics"]).Should().BeEmpty();
+        ((string?)binding["definitionScope"]).Should().Be("explicit-sql-catalog");
+        ((string?)binding["sourcePath"]).Should().Be(catalog);
+        Problems(Gate(sqlDeclarations: catalog)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SqlCatalogThatIsNotConfigured_IsRejected()
+    {
+        Write("estate/PROG.cbl", SqlProgram + "\n");
+        Export([Write("sql/CONTROL.cpy", SqlCatalog + "\n")]);
+
+        Problems(Gate()).Should().Equal(
+            "native-sql-catalog-unverified:SQL declaration does not match an explicit native catalog input");
+    }
+
+    [Fact]
+    public void SqlCatalogRootPointingAtAnotherFile_IsRejected()
+    {
+        Write("estate/PROG.cbl", SqlProgram + "\n");
+        var catalog = Write("sql/CONTROL.cpy", SqlCatalog + "\n");
+        var document = Export([catalog]);
+        var other = Write("sql/OTHER.cpy", SqlCatalog + "\n");
+        Objects(FirstStatement(document, "DELETE")["resourceBindings"])
+            .Single(item => (string?)item["kind"] == "SQL_RELATION")["definitionSyntax"]!["range"]!["path"] = other;
+        Save(ExportPath, document);
+
+        Problems(Gate(sqlDeclarations: catalog)).Should().Equal("starforge-syntax-root-outside-inputs:SqlDeclareTable");
     }
 }
