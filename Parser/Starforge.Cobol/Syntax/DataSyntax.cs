@@ -141,6 +141,9 @@ public sealed record DataEntry(NodeSpan Span, SourceRange Range, int Level) : Sy
 
     public IReadOnlyList<DataEntry> Children { get; init; } = Array.Empty<DataEntry>();
 
+    // The entry's own tokens; Span is widened to cover the children of a group.
+    public NodeSpan HeaderSpan { get; init; }
+
     public IReadOnlyList<ErrorNode> Errors { get; init; } = Array.Empty<ErrorNode>();
 
     public string DisplayName => Name ?? "FILLER";

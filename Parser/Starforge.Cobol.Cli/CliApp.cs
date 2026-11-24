@@ -6,9 +6,12 @@ public static class CliApp
         Usage:
           starforge coverage --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rekt-baseline <dir>]
           starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>]
+          starforge emit --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt --layouts --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt --procedure --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt exec --source <estate-dir> [--source <estate-dir>...] --rekt-baseline <dir> --out <dir>
+          starforge diff-rekt --model --rekt <rekt-baseline-dir> --starforge <emit-dir> --source <estate-dir>... --out <dir>
+            (runs Parser/Starforge.Cobol.ModelDiff, which loads both trees through the application's own readers)
         """;
 
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
@@ -26,6 +29,11 @@ public static class CliApp
                 return LayoutDiffCommand.Run(CommandLine.Parse(args.Skip(1).Where(a => a != "--layouts")), stdout, stderr);
             }
 
+            if (args[0] == "diff-rekt" && args.Skip(1).Contains("--model", StringComparer.Ordinal))
+            {
+                return ModelDiffLauncher.Run(args.Skip(1).Where(a => a != "--model").ToArray(), stdout, stderr);
+            }
+
             if (args[0] == "diff-rekt" && args.Skip(1).Contains("--procedure", StringComparer.Ordinal))
             {
                 return ProcedureDiffCommand.Run(CommandLine.Parse(args.Skip(1).Where(a => a != "--procedure")), stdout, stderr);
@@ -36,6 +44,7 @@ public static class CliApp
             {
                 "coverage" => CoverageCommand.Run(parsed, stdout, stderr),
                 "parse" => ParseCommand.Run(parsed, stdout, stderr),
+                "emit" => EmitCommand.Run(parsed, stdout, stderr),
                 "diff-rekt" when parsed.Positional is ["exec"] => ExecDiffCommand.Run(parsed, stdout, stderr),
                 "diff-rekt" => NotYet(stderr),
                 _ => UnknownCommand(args[0], stderr),
@@ -51,7 +60,7 @@ public static class CliApp
 
     private static int NotYet(TextWriter stderr)
     {
-        stderr.WriteLine("diff-rekt is not implemented until M5 (only diff-rekt --layouts, --procedure and exec are available)");
+        stderr.WriteLine("diff-rekt needs a comparison: --layouts, --procedure, --model or exec");
         return 2;
     }
 

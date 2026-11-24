@@ -51,12 +51,12 @@ public sealed class CliTests
     }
 
     [Fact]
-    public void DiffRektIsAStubUntilM5()
+    public void DiffRektWithoutAComparisonIsAUsageError()
     {
         var (exit, _, stderr) = Run("diff-rekt");
 
         exit.Should().Be(2);
-        stderr.Should().Contain("not implemented until M5");
+        stderr.Should().Contain("diff-rekt needs a comparison: --layouts, --procedure, --model or exec");
     }
 
     [Fact]

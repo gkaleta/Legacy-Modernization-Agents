@@ -118,23 +118,7 @@ public static class JsonReport
 
         w.WriteEndArray();
 
-        w.WriteStartArray("diagnostics");
-        foreach (var d in DistinctDiagnostics(r.Diagnostics))
-        {
-            w.WriteStartObject();
-            w.WriteString("code", d.Code);
-            w.WriteString("severity", d.Severity.ToString());
-            w.WriteString("fingerprint", d.Fingerprint);
-            w.WriteString("message", d.Message);
-            if (d.Range is { } range)
-            {
-                w.WriteString("range", paths.Show(range));
-            }
-
-            w.WriteEndObject();
-        }
-
-        w.WriteEndArray();
+        WriteDiagnostics(w, r, paths);
 
         SyntaxReport.WritePrograms(w, r, paths);
 
@@ -170,6 +154,7 @@ public static class JsonReport
         w.WriteNumber("tokenCount", r.Tokens.Count);
         WriteCoverageSummary(w, r.Coverage);
         WriteUnresolved(w, r);
+        WriteDiagnostics(w, r, paths);
         SyntaxReport.WritePrograms(w, r, paths);
         w.WriteStartArray("tokens");
         var tokens = r.Tokens;
@@ -275,6 +260,27 @@ public static class JsonReport
         CopyStatus.DepthExceeded => "copy-depth-exceeded",
         _ => "copybook-read-error",
     };
+
+    private static void WriteDiagnostics(Utf8JsonWriter w, CompilationResult r, PathDisplay paths)
+    {
+        w.WriteStartArray("diagnostics");
+        foreach (var d in DistinctDiagnostics(r.Diagnostics))
+        {
+            w.WriteStartObject();
+            w.WriteString("code", d.Code);
+            w.WriteString("severity", d.Severity.ToString());
+            w.WriteString("fingerprint", d.Fingerprint);
+            w.WriteString("message", d.Message);
+            if (d.Range is { } range)
+            {
+                w.WriteString("range", paths.Show(range));
+            }
+
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
+    }
 
     // A copybook included several times reports its own reader diagnostics once per instance; show each once.
     private static IEnumerable<Diagnostic> DistinctDiagnostics(IEnumerable<Diagnostic> diagnostics)

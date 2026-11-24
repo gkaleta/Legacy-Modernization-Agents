@@ -48,9 +48,10 @@ internal static class ParseCommand
             }
         }
 
-        foreach (var d in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Distinct())
+        foreach (var d in result.Diagnostics.Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning).Distinct())
         {
-            stderr.WriteLine($"{(d.Range is { } r ? display.Show(r) : display.Show(file))}: {d.Code}: {d.Message}");
+            var severity = d.Severity == DiagnosticSeverity.Error ? "error" : "warning";
+            stderr.WriteLine($"{(d.Range is { } r ? display.Show(r) : display.Show(file))}: {severity}: {d.Code}: {d.Message}");
         }
 
         return result.Coverage.Unaccounted == 0 && result.Coverage.Conflicts == 0 ? 0 : 1;

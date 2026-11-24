@@ -708,6 +708,7 @@ internal sealed partial class Parser
             External = external,
             Global = global,
             GroupUsageNational = groupNational,
+            HeaderSpan = span,
             Errors = errors,
         };
     }
