@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Starforge.Cobol.Copy;
 using Starforge.Cobol.Deps;
 using Starforge.Cobol.Lexing;
@@ -421,6 +422,10 @@ internal sealed class PlatformContract
         return usages;
     }
 
+    // FIL-Rnnn is the pipeline preprocessor's layout-neutral rename of FILLER REDEFINES; the gate reads it as FILLER.
+    private static bool Overlay(DataItem record) =>
+        record.IsFiller || record.Name is { } name && Regex.IsMatch(name, "^FIL-R[0-9]+$", RegexOptions.IgnoreCase);
+
     private sealed record FieldBinding(DataItem Item, DataItem Record, string MapRecord, string Path, JsonElement Map);
 
     // A field of a symbolic map record (<map>I / <map>O) whose copybook has a .bms-layout.json, or one in an
@@ -433,7 +438,8 @@ internal sealed class PlatformContract
         }
 
         var mapRecord = record;
-        if (record.IsFiller && record.Redefines is { } redefined)
+        var overlay = Overlay(record);
+        if (overlay && record.Redefines is { } redefined)
         {
             mapRecord = redefined;
         }
@@ -455,7 +461,7 @@ internal sealed class PlatformContract
         }
 
         // Only attribute bytes (<field>A/C/H, or a one-byte overlay member) are governed by DFHBMSCA.
-        var attribute = record.IsFiller
+        var attribute = overlay
             ? item.Length == 1
             : map[0].GetProperty("fields").EnumerateArray().Any(f => name[..^1].Equals(f.GetProperty("name").GetString(), StringComparison.OrdinalIgnoreCase));
         return attribute ? new FieldBinding(item, record, recordName, projection, map[0]) : null;
@@ -518,7 +524,7 @@ internal sealed class PlatformContract
             var mapName = field.Map.GetProperty("name").GetString()!;
             var mapset = field.Map.GetProperty("mapset").GetString()!;
             var layoutPath = field.Path + ".bms-layout.json";
-            if (field.Record.IsFiller)
+            if (Overlay(field.Record))
             {
                 if (reference.Subscripts is not [var subscript] || subscript.Span.TokenCount != 1 || reference.Name.Qualifiers.Count != 0)
                 {
