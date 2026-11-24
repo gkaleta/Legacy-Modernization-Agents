@@ -311,7 +311,7 @@ public static partial class RektEvidence
         if (PyJson.PyEquals(kind, "CICS_PROGRAM"))
         {
             var programPath = scope.Host(Subscript(binding, "programSourcePath"));
-            var continuation = ContinuationRules.Contains(Str(statement, "grammarRule"));
+            var continuation = ContinuationRules.Contains(StatementRule(statement));
             if (!IsRelativeTo(programPath, scope.SourceRoot)
                 || DigestDiffers(programPath, binding, "programSourceSha256")
                 || !continuation && !Items(node, "dependencies").Any(child => Str(child, "dependencyKind") is "CALL" or "CICS_LINK" or "CICS_RUN"

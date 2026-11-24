@@ -33,11 +33,14 @@ public static class RektEvidenceCommand
         var transformed = new Option<string?>("--transformed", "Preprocessed file the target was copied from.");
         var derived = new Option<bool>("--derived", "The target is derived from, not a copy of, the source.");
         var estate = new Option<string?>("--estate", "Estate folder under the output root.");
+        var engine = new Option<string>("--engine", () => NativeProducer.Rekt,
+            "Parser that wrote the dependency export (rekt or starforge); write rejects an export from another engine.");
+        engine.FromAmong(NativeProducer.Rekt, NativeProducer.Starforge);
         cmd.AddArgument(action);
         foreach (var option in new Option[]
                  {
                      sourceRoot, relativePath, outputRoot, stagingRoot, parserSourceRoot, dependencyProfile, sqlDeclarations,
-                     exportExitCode, source, target, transformed, derived, estate,
+                     exportExitCode, source, target, transformed, derived, estate, engine,
                  })
             cmd.AddOption(option);
 
@@ -63,7 +66,7 @@ public static class RektEvidenceCommand
                     _ => RektEvidence.Write(Required(sourceRoot), Required(relativePath), Required(outputRoot),
                         parse.GetValueForOption(exportExitCode), parse.GetValueForOption(stagingRoot),
                         parse.GetValueForOption(parserSourceRoot), parse.GetValueForOption(dependencyProfile),
-                        parse.GetValueForOption(sqlDeclarations)),
+                        parse.GetValueForOption(sqlDeclarations), parse.GetValueForOption(engine)),
                 };
             }
             catch (Exception error) when (RektEvidence.Caught(error) || BmsSymbolicMap.Caught(error))

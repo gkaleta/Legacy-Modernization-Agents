@@ -60,9 +60,9 @@ public static partial class RektEvidence
         var syntax = Get(statement, "syntax");
         if (syntax is not JsonObject || Str(statement, "bindingStatus") != "complete" || Str(statement, "sourceText") is null)
             return false;
-        var rule = Get(statement, "grammarRule");
-        if (!PyJson.PyEquals(Get(syntax, "rule"), rule)) return false;
-        var ruleText = PyJson.Str(rule);
+        var ruleText = StatementRule(statement);
+        if (NativeProducer.IsStarforge ? ruleText is null : !PyJson.PyEquals(Get(syntax, "rule"), Get(statement, "grammarRule")))
+            return false;
         var nodes = SyntaxNodes(syntax);
         var tokens = Tokens(nodes);
         if (ruleText == "Cics_returnContext" && tokens.Select(token => token.ToUpperInvariant()).SequenceEqual(["RETURN"]))
@@ -84,8 +84,8 @@ public static partial class RektEvidence
                 || CicsFileOperations.ContainsKey(ruleText) && Str(statement, "bindingBasis") == "parsed-cics-file-operation"))
             return NativeCicsLocalBound(statement!, syntax, nodes, tokens);
         if (ruleText != "Cics_writeContext" || Str(statement, "operation") != "WRITE") return false;
-        var files = nodes.Where(node => Str(node, "rule") == "Cics_file_nameContext").ToList();
-        if (files.Count != 1 || !nodes.Any(node => Str(node, "rule") == "Cics_write_fileContext")
+        var files = nodes.Where(node => IsRule(node, "Cics_file_nameContext")).ToList();
+        if (files.Count != 1 || !nodes.Any(node => IsRule(node, "Cics_write_fileContext"))
             || tokens.Any(token => token.ToUpperInvariant() == "SYSID")
             || Get(statement, "resourceBindings") is not JsonArray { Count: 1 } bindings || bindings[0] is not JsonObject binding)
             return false;
@@ -103,8 +103,21 @@ public static partial class RektEvidence
             && 0 <= keyLength && keyLength <= recordSize && recordSize > 0;
     }
 
+    // Command words and option names directly under a CICS command.
+    private static List<string> CommandWords(JsonNode syntax)
+    {
+        var words = new List<string>();
+        foreach (var child in Items(syntax, "children"))
+            if (Has(child, "token")) words.Add(PyJson.PyStr(Get(child, "token")).ToUpperInvariant());
+            else if (NativeProducer.IsStarforge && Str(child, "node") == "CicsOption" && Arr(child, "children") is { Count: > 0 } parts
+                     && Str(parts[0], "token") is { } name)
+                words.Add(name.ToUpperInvariant());
+        return words;
+    }
+
     private static List<string> CicsFileOptions(JsonNode syntax)
     {
+        if (NativeProducer.IsStarforge) return CommandWords(syntax);
         string[] parents = ["Cics_write_fileContext", "Cics_delete_fileContext", "Cics_delete_ridfldContext", "Cics_intoContext"];
         var options = new List<string>();
         void Visit(JsonNode node, string? parentRule)
@@ -113,11 +126,11 @@ public static partial class RektEvidence
             {
                 if (Has(child, "token") && (ReferenceEquals(node, syntax) || parents.Contains(parentRule)))
                     options.Add(PyJson.PyStr(Get(child, "token")).ToUpperInvariant());
-                else if (Has(child, "rule"))
-                    Visit(child!, Str(child, "rule"));
+                else if (HasRule(child))
+                    Visit(child!, RuleOf(child));
             }
         }
-        Visit(syntax, Str(syntax, "rule"));
+        Visit(syntax, RuleOf(syntax));
         return options;
     }
 
@@ -126,7 +139,9 @@ public static partial class RektEvidence
     {
         var children = Items(syntax, "children").ToList();
         var queues = CicsOperands(syntax, "QUEUE");
-        if (children.Count != 2 || Str(children[1], "rule") != "Cics_writeq_tdContext" || queues.Count != 1
+        var form = NativeProducer.IsStarforge ? IsRule(syntax, "Cics_writeq_tdContext")
+            : children.Count == 2 && IsRule(children[1], "Cics_writeq_tdContext");
+        if (!form || queues.Count != 1
             || CicsOperands(syntax, "FROM").Count != 1 || CicsOperands(syntax, "LENGTH").Count > 1
             || CicsOperands(syntax, "SYSID").Count > 0)
             return false;
@@ -144,12 +159,12 @@ public static partial class RektEvidence
 
     private static bool NativeCicsFileBound(JsonNode syntax, string operation, JsonNode? binding)
     {
-        var names = SyntaxNodes(syntax).Where(node => Str(node, "rule") == "Cics_file_nameContext").ToList();
+        var names = SyntaxNodes(syntax).Where(node => IsRule(node, "Cics_file_nameContext")).ToList();
         var options = CicsFileOptions(syntax);
         if (names.Count != 1 || Items(names[0], "children").Count() != 2
-            || Str(Arr(names[0], "children")![1], "rule") != "Cics_nameContext"
+            || !IsRule(Arr(names[0], "children")![1], "Cics_nameContext")
             || options.Any(CicsFileUnsupported.Contains)
-            || Str(syntax, "rule") == "Cics_deleteContext" && Items(syntax, "children").Count() != 2)
+            || !NativeProducer.IsStarforge && IsRule(syntax, "Cics_deleteContext") && Items(syntax, "children").Count() != 2)
             return false;
         var name = CicsConstantOperand(Arr(names[0], "children")![1], Get(binding, "targetResolution"), 1, 8);
         var attributes = Get(binding, "attributes") as JsonObject;
@@ -200,8 +215,8 @@ public static partial class RektEvidence
             var children = Items(node, "children").ToList();
             for (var index = 1; index < children.Count; index++)
             {
-                if ((Str(children[index - 1], "token") ?? "").ToUpperInvariant() != option || !Has(children[index], "rule")) continue;
-                operands.Add(option == "MAP" && Str(children[index], "rule") == "Cics_receive_mapContext"
+                if ((Str(children[index - 1], "token") ?? "").ToUpperInvariant() != option || !HasRule(children[index])) continue;
+                operands.Add(option == "MAP" && IsRule(children[index], "Cics_receive_mapContext")
                     ? Arr(children[index], "children")![0]! : children[index]!);
             }
         }
@@ -240,26 +255,27 @@ public static partial class RektEvidence
     // SEND FROM(area) LENGTH|FLENGTH(n) [WAIT] [ERASE] [RESP/NOHANDLE]: a raw write to the principal facility.
     private static bool CicsPlainSend(JsonNode syntax)
     {
+        if (NativeProducer.IsStarforge) return NativeProducer.PlainSend(CommandWords(syntax));
         static bool Tail(JsonNode? node)
         {
-            if (Str(node, "rule") == "Cics_handle_responseContext") return true;
+            if (IsRule(node, "Cics_handle_responseContext")) return true;
             if (Has(node, "token")) return PyJson.PyStr(Get(node, "token")).ToUpperInvariant() is "WAIT" or "ERASE";
-            return Str(node, "rule") is { } rule && PlainSendTail.Contains(rule)
+            return RuleOf(node) is { } rule && PlainSendTail.Contains(rule)
                 && (rule != "Cics_send_eraseContext" || Items(node, "children").Count() == 1)
                 && Items(node, "children").All(Tail);
         }
         var children = Items(syntax, "children").ToList();
         var group = children.Count == 2 ? children[1] : null;
-        var parts = Str(group, "rule") == "Cics_send_groupContext" ? Items(group, "children").ToList() : [];
-        return parts.Count == 2 && Str(parts[0], "rule") == "Cics_send_fromContext" && Tail(parts[1]);
+        var parts = IsRule(group, "Cics_send_groupContext") ? Items(group, "children").ToList() : [];
+        return parts.Count == 2 && IsRule(parts[0], "Cics_send_fromContext") && Tail(parts[1]);
     }
 
     private static bool CicsTerminalVariant(JsonNode syntax)
     {
         var nodes = SyntaxNodes(syntax);
-        var rules = nodes.Select(node => Str(node, "rule")).ToHashSet();
+        var rules = nodes.SelectMany(Rules).ToHashSet();
         var tokens = UpperTokens(syntax);
-        var supported = Str(syntax, "rule") switch
+        var supported = RuleOf(syntax) switch
         {
             "Cics_sendContext" => rules.Overlaps(["Cics_send_control_minContext", "Cics_send_map_minContext", "Cics_send_text_stdContext"])
                 || CicsPlainSend(syntax),
@@ -297,7 +313,7 @@ public static partial class RektEvidence
             if (value is null && Str(proof, "kind") == "structured-reaching-assignments")
             {
                 // One SEND names one screen: only a reaching proof with a single possible name binds it.
-                var reaching = Str(syntax, "rule") == "Cics_sendContext" ? CicsReachingOperand(operand, proof, 1, 7) : null;
+                var reaching = IsRule(syntax, "Cics_sendContext") ? CicsReachingOperand(operand, proof, 1, 7) : null;
                 value = reaching is { Count: 1 } ? reaching[0] : null;
             }
             return value;
@@ -305,7 +321,7 @@ public static partial class RektEvidence
         var name = Screen(maps[0], Get(resolution, "map"));
         var mapset = mapsets.Count > 0 ? Screen(mapsets[0], Get(resolution, "mapset")) : name;
         var definition = Has(binding, "definition") ? Get(binding, "definition") : new JsonObject();
-        string[] modes = Str(syntax, "rule") == "Cics_receiveContext" ? ["IN", "INOUT"] : ["OUT", "INOUT"];
+        string[] modes = IsRule(syntax, "Cics_receiveContext") ? ["IN", "INOUT"] : ["OUT", "INOUT"];
         return name is not null && mapset is not null && Str(binding, "kind") == "CICS_MAP"
             && StrEquals(Get(binding, "name"), name) && StrEquals(Get(binding, "mapset"), mapset)
             && definition is JsonObject && StrEquals(Get(definition, "name"), name) && StrEquals(Get(definition, "mapset"), mapset)
@@ -337,7 +353,7 @@ public static partial class RektEvidence
 
     private static string? EntryName(JsonNode? syntax, string? none)
     {
-        var entries = SyntaxNodes(syntax).Where(node => Str(node, "rule") == "EntryNameContext").ToList();
+        var entries = SyntaxNodes(syntax).Where(node => IsRule(node, "EntryNameContext")).ToList();
         return entries.Count == 1 ? SyntaxText(entries[0]).ToUpperInvariant() : entries.Count == 0 ? none : null;
     }
 
@@ -362,10 +378,10 @@ public static partial class RektEvidence
         if (EntryName(definition, "FILLER") != names[0]) return false;
         if (names.Count == 1) return true;
         if (Get(binding, "qualificationPath") is not JsonArray { Count: >= 2 } path || !PyJson.PyEquals(path[^1], definition)
-            || path.Any(item => item is not JsonObject || Str(item, "rule") != "DataDescriptionEntryFormat1Context" || SyntaxNodes(item).Count == 0))
+            || path.Any(item => item is not JsonObject || !IsRule(item, "DataDescriptionEntryFormat1Context") || SyntaxNodes(item).Count == 0))
             return false;
         if (!LevelsValid(FirstTokens(path))
-            || path.Take(path.Count - 1).Any(item => SyntaxNodes(item).Any(node => Str(node, "rule") == "DataPictureClauseContext")))
+            || path.Take(path.Count - 1).Any(item => SyntaxNodes(item).Any(node => IsRule(node, "DataPictureClauseContext"))))
             return false;
         var ancestors = path.Take(path.Count - 1).Reverse().Select(item => EntryName(item, "FILLER")).ToList();
         var cursor = 0;
@@ -385,14 +401,14 @@ public static partial class RektEvidence
         if (Full("[A-Z][A-Z0-9_-]*", tokens[0]) is null || Full("[A-Z][A-Z0-9_-]*|[1-9][0-9]{0,3}", tokens[2]) is null
             || EntryName(definition, null) != tokens[0] || Get(binding, "qualificationPath") is not JsonArray { Count: > 0 } path
             || !PyJson.PyEquals(path[^1], definition)
-            || path.Any(item => item is not JsonObject || Str(item, "rule") != "DataDescriptionEntryFormat1Context")
-            || path.Count(item => SyntaxNodes(item).Any(node => Str(node, "rule") == "DataOccursClauseContext")) != 1)
+            || path.Any(item => item is not JsonObject || !IsRule(item, "DataDescriptionEntryFormat1Context"))
+            || path.Count(item => SyntaxNodes(item).Any(node => IsRule(node, "DataOccursClauseContext"))) != 1)
             return false;
         var levels = FirstTokens(path);
         if (!LevelsValid(levels) || int.Parse(levels[0]) != 1) return false;
         if (PyCompat.IsDigits(tokens[2])) return !Has(binding, "subscriptSyntax");
         var subscript = Get(binding, "subscriptSyntax");
-        return Str(subscript, "rule") is "DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"
+        return RuleOf(subscript) is "DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"
             && EntryName(subscript, null) == tokens[2];
     }
 }

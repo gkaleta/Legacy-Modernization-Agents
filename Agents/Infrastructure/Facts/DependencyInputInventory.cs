@@ -1,3 +1,4 @@
+using CobolToQuarkusMigration.Agents.Infrastructure.Rekt;
 using System.Security.Cryptography;
 using System.Text.Json;
 using CobolToQuarkusMigration.Helpers;
@@ -30,7 +31,7 @@ public sealed class DependencyInputInventory(string sourceRoot)
                     || string.IsNullOrWhiteSpace(definition.Name) || string.IsNullOrWhiteSpace(definition.Path))
                 || evidence.UnresolvedDiagnostics.Any(diagnostic => diagnostic is null))
                 return new([], "Input inventory could not be completed: dependency evidence contains invalid input bindings or diagnostics. No empty dependency set is inferred.");
-            if (evidence.SchemaVersion != 1 || evidence.Producer != "cobol-rekt/dependency" || evidence.RelativePath != program)
+            if (evidence.SchemaVersion != 1 || NativeProducer.OfEvidence(evidence.Producer) is null || evidence.RelativePath != program)
                 return new([], "Input inventory is unverified: the evidence schema, producer or program identity does not match. Regenerate matching evidence; no empty dependency set is inferred.");
             var items = evidence.Definitions.Distinct().Select(definition => Inspect(definition, program)).ToList();
             foreach (var reference in evidence.UnresolvedDiagnostics.Select(Reference).OfType<(string Kind, string Name)>()

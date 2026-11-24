@@ -81,11 +81,11 @@ public static partial class RektEvidence
 
     internal static List<JsonObject> NativeSqlReferences(JsonNode? syntax, string? parentRule = null)
     {
-        var rule = Str(syntax, "rule");
+        var rule = RuleOf(syntax);
         var kind = rule is not null && SqlReferenceRules.TryGetValue(rule, out var found) ? found : null;
         var nodes = SyntaxNodes(syntax);
         var joined = string.Concat(Tokens(nodes));
-        if (kind == "SQL_FUNCTION" && (nodes.Any(node => Str(node, "rule") == "Dbs_inbuild_functionsContext")
+        if (kind == "SQL_FUNCTION" && (nodes.Any(node => IsRule(node, "Dbs_inbuild_functionsContext"))
                                        || Db2ZosBuiltinsOutsideGrammar.Contains(joined.ToUpperInvariant())))
             kind = null;
         if (kind == "SQL_RELATION" && parentRule != "Dbs_declare_tableContext"
@@ -99,10 +99,10 @@ public static partial class RektEvidence
                 || kind == "SQL_CURSOR" && parentRule == "Dbs_declare_cursorContext";
             return [new JsonObject
             {
-                ["kind"] = kind, ["name"] = name, ["role"] = declaration ? "declaration" : "reference", ["grammarRule"] = rule,
+                ["kind"] = kind, ["name"] = name, ["role"] = declaration ? "declaration" : "reference", ["grammarRule"] = NodeName(syntax),
             }];
         }
-        return Items(syntax, "children").Where(child => Has(child, "rule"))
+        return Items(syntax, "children").Where(child => HasRule(child))
             .SelectMany(child => NativeSqlReferences(child, rule)).ToList();
     }
 
@@ -111,9 +111,9 @@ public static partial class RektEvidence
     internal static bool NativeSqlStatementBound(JsonNode? statement)
     {
         var syntax = Get(statement, "semanticSyntax");
-        if (Str(statement, "kind") != "EXEC_SQL" || Str(statement, "grammarRule") != "SqlCodeContext"
+        if (Str(statement, "kind") != "EXEC_SQL" || StatementRule(statement) != "SqlCodeContext"
             || Str(statement, "bindingStatus") != "complete" || Str(statement, "semanticStatus") != "complete"
-            || syntax is not JsonObject || Str(syntax, "rule") != "StartSqlRuleContext"
+            || syntax is not JsonObject || !IsRule(syntax, "StartSqlRuleContext")
             || PyJson.Truthy(Get(statement, "bindingDiagnostics")))
             return false;
         var nodes = SyntaxNodes(syntax);
@@ -145,15 +145,15 @@ public static partial class RektEvidence
             var kind = Str(binding, "kind");
             if (kind == "SQL_HOST_VARIABLE")
             {
-                if (Str(definition, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
+                if (RuleOf(definition) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
                     return false;
-                var names = SyntaxNodes(definition).Where(entry => Str(entry, "rule") == "EntryNameContext")
+                var names = SyntaxNodes(definition).Where(entry => IsRule(entry, "EntryNameContext"))
                     .Select(entry => string.Concat(Tokens(SyntaxNodes(entry))).ToUpperInvariant()).ToList();
                 if (names.Count != 1 || !StrEquals(Get(binding, "name"), names[0])) return false;
             }
             else if (kind is "SQL_RELATION" or "SQL_CURSOR")
             {
-                if (Str(definition, "rule") != (kind == "SQL_RELATION" ? "Dbs_declare_tableContext" : "Dbs_declare_cursorContext"))
+                if (RuleOf(definition) != (kind == "SQL_RELATION" ? "Dbs_declare_tableContext" : "Dbs_declare_cursorContext"))
                     return false;
                 var declarationName = Str(binding, "name");
                 if (Has(binding, "qualification"))
@@ -187,9 +187,9 @@ public static partial class RektEvidence
     {
         var rule = Str(statement, "operation") is { } operation && NativeFileRules.TryGetValue(operation, out var found) ? found : null;
         var syntax = Get(statement, "syntax");
-        if (rule is null || Str(statement, "grammarRule") != rule || Str(statement, "bindingStatus") != "complete"
+        if (rule is null || StatementRule(statement) != rule || Str(statement, "bindingStatus") != "complete"
             || Str(statement, "sourceText") is not { } text || text.Trim().Length == 0
-            || syntax is not JsonObject || Str(syntax, "rule") != rule || SyntaxNodes(syntax).Count == 0
+            || syntax is not JsonObject || RuleOf(syntax) != rule || SyntaxNodes(syntax).Count == 0
             || Get(statement, "fileOperands") is not JsonArray { Count: > 0 } operands || !operands.All(PyJson.IsStr)
             || Get(statement, "resourceBindings") is not JsonArray { Count: > 0 } bindings)
             return false;
@@ -202,11 +202,11 @@ public static partial class RektEvidence
                 return false;
             var definition = Get(binding, "definitionSyntax");
             var description = Get(binding, "descriptionSyntax");
-            if (definition is not JsonObject || Str(definition, "rule") != "FileControlEntryContext"
-                || description is not JsonObject || Str(description, "rule") != "FileDescriptionEntryClausesContext")
+            if (definition is not JsonObject || !IsRule(definition, "FileControlEntryContext")
+                || description is not JsonObject || !IsRule(description, "FileDescriptionEntryClausesContext"))
                 return false;
-            var declared = SyntaxNodes(definition).Where(node => Str(node, "rule") == "FileNameContext").ToList();
-            var described = SyntaxNodes(description).Where(node => Str(node, "rule") == "CobolWordContext").ToList();
+            var declared = SyntaxNodes(definition).Where(node => IsRule(node, "FileNameContext")).ToList();
+            var described = SyntaxNodes(description).Where(node => IsRule(node, "CobolWordContext")).ToList();
             if (declared.Count == 0 || described.Count == 0
                 || string.Concat(Tokens(SyntaxNodes(declared[0]))).ToUpperInvariant() != name
                 || string.Concat(Tokens(SyntaxNodes(described[0]))).ToUpperInvariant() != name)
@@ -220,6 +220,9 @@ public static partial class RektEvidence
 
     // document.get(key, default) where a present null stays null.
     internal static JsonNode? GetOr(JsonNode? node, string key, JsonNode fallback) => Has(node, key) ? Get(node, key) : fallback;
+
+    // Evidence vocabulary of the current producer: antlr-tree:* for cobol-rekt, starforge-tree:* for Starforge.
+    internal static string Proof(string name) => NativeProducer.EvidencePrefix + name;
 
     internal static bool NativeDomainEvidence(JsonNode? document, string kind)
     {
@@ -235,38 +238,39 @@ public static partial class RektEvidence
         var nativeFiles = statements.Where(statement => Str(statement, "kind") == "FILE_IO").ToList();
         if (nativeFiles.Count > 0 && !nativeFiles.All(NativeFileStatementBound)) return false;
         if (!AbsenceProofs.TryGetValue(kind, out var absenceProof)) return true;
+        absenceProof = Proof(absenceProof["antlr-tree:".Length..]);
         var boundFiles = statements.Where(statement => Str(statement, "kind") == "EXEC_CICS"
             && GetOr(statement, "resourceBindings", new JsonArray()) is JsonArray resources
             && resources.Any(binding => binding is JsonObject && Str(binding, "kind") == "CICS_FILE")).ToList();
         var present = Str(presence, kind);
         var hasSql = statements.Any(statement => Str(statement, "kind") == "EXEC_SQL");
         bool CicsBound() => statements.Where(statement => Str(statement, "kind") == "EXEC_CICS").All(NativeCicsStatementBound);
-        if (kind == "FILE_IO" && present == "antlr-tree:bound-file-control-resources")
+        if (kind == "FILE_IO" && present == Proof("bound-file-control-resources"))
             return !absent.ContainsKey(kind) && nativeFiles.Count > 0 && boundFiles.Count == 0
                 && (!hasSql || NativeDomainEvidence(document, "EXEC_SQL")) && CicsBound();
-        if (kind == "FILE_IO" && present == "antlr-tree:bound-cics-file-resources")
+        if (kind == "FILE_IO" && present == Proof("bound-cics-file-resources"))
             return !absent.ContainsKey(kind) && boundFiles.Count > 0 && nativeFiles.Count == 0
                 && (!hasSql || NativeDomainEvidence(document, "EXEC_SQL"))
                 && statements.All(statement => Str(statement, "kind") == "EXEC_CICS"
                     ? NativeCicsStatementBound(statement) : NativeSqlStatementBound(statement));
-        if (kind == "FILE_IO" && present == "antlr-tree:bound-sql-resources")
+        if (kind == "FILE_IO" && present == Proof("bound-sql-resources"))
             return !absent.ContainsKey(kind) && boundFiles.Count == 0 && nativeFiles.Count == 0
                 && NativeDomainEvidence(document, "EXEC_SQL") && CicsBound();
         if (Str(absent, kind) == absenceProof)
         {
             if (kind == "FILE_IO" && statements.Any(statement => SyntaxNodes(Get(statement, "syntax"))
-                    .Any(node => Str(node, "rule") == "Cics_file_nameContext")))
+                    .Any(node => IsRule(node, "Cics_file_nameContext"))))
                 return false;
             if (kind == "FILE_IO" && hasSql) return false;
             return matching.Count == 0 && (kind == "FILE_IO" || statements.Count == 0);
         }
-        var perDomain = kind switch { "EXEC_SQL" => "antlr-tree:no-sql-contexts", "EXEC_CICS" => "antlr-tree:no-cics-contexts", _ => null };
+        var perDomain = kind switch { "EXEC_SQL" => Proof("no-sql-contexts"), "EXEC_CICS" => Proof("no-cics-contexts"), _ => null };
         if (perDomain is not null && Str(absent, kind) == perDomain)
             return statements.Count > 0 && matching.Count == 0;
-        if (kind == "EXEC_SQL" && !absent.ContainsKey(kind) && matching.Count > 0 && present == "antlr-tree:bound-sql-resources")
+        if (kind == "EXEC_SQL" && !absent.ContainsKey(kind) && matching.Count > 0 && present == Proof("bound-sql-resources"))
         {
             var declarations = matching.SelectMany(statement => SyntaxNodes(Get(statement, "semanticSyntax")))
-                .Where(node => Str(node, "rule") is "Dbs_declare_tableContext" or "Dbs_declare_cursorContext").ToList();
+                .Where(node => RuleOf(node) is "Dbs_declare_tableContext" or "Dbs_declare_cursorContext").ToList();
             return matching.All(NativeSqlStatementBound)
                 && matching.SelectMany(statement => Items(statement, "resourceBindings"))
                     .Where(binding => Str(binding, "kind") is "SQL_RELATION" or "SQL_CURSOR")
@@ -274,15 +278,15 @@ public static partial class RektEvidence
                         || Str(binding, "definitionScope") == "explicit-sql-catalog" && Str(binding, "kind") == "SQL_RELATION");
         }
         if (kind != "EXEC_CICS" || absent.ContainsKey(kind) || matching.Count == 0) return false;
-        if (present == "antlr-tree:bound-cics-resources") return matching.All(NativeCicsStatementBound);
-        if (present != "antlr-tree:resource-free-cics-return") return false;
+        if (present == Proof("bound-cics-resources")) return matching.All(NativeCicsStatementBound);
+        if (present != Proof("resource-free-cics-return")) return false;
         foreach (var statement in matching)
         {
             var syntax = Get(statement, "syntax");
-            if (Str(statement, "operation") != "RETURN" || Str(statement, "grammarRule") != "Cics_returnContext"
+            if (Str(statement, "operation") != "RETURN" || StatementRule(statement) != "Cics_returnContext"
                 || Str(statement, "bindingStatus") != "complete"
                 || Str(statement, "sourceText") is not { } text || text.Trim().ToUpperInvariant() != "RETURN"
-                || syntax is not JsonObject || Str(syntax, "rule") != "Cics_returnContext")
+                || syntax is not JsonObject || !IsRule(syntax, "Cics_returnContext"))
                 return false;
             if (Get(syntax, "children") is not JsonArray { Count: 1 } children || !KeysAre(children[0], "token")
                 || Str(children[0], "token") is not { } token || token.ToUpperInvariant() != "RETURN")

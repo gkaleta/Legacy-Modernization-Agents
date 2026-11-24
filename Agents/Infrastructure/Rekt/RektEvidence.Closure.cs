@@ -57,7 +57,8 @@ public static partial class RektEvidence
             {
                 var export = ReadJson(Path.Join(outputRoot, relative + "-deps.json"));
                 var evidence = ReadJson(Path.Join(outputRoot, relative + ".report", "dependency-evidence.json"));
-                if (PyJson.PyEquals(Get(evidence, "originalSourceSha256"), PyCompat.Digest(source)) && Get(export, "commareaInventory") is JsonObject found)
+                if (PyJson.PyEquals(Get(evidence, "originalSourceSha256"), PyCompat.Digest(source)) && Get(export, "commareaInventory") is JsonObject found
+                    && (Get(evidence, "producer") is null || NativeProducer.Of(export) == NativeProducer.OfEvidence(PyJson.Str(Get(evidence, "producer")))))
                     (inventory, parsedSha) = (found, Get(export, "sourceSha256"));
             }
             catch (Exception error) when (error is PyError or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)

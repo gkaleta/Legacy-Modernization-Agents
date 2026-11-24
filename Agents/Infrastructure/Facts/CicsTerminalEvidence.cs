@@ -1,3 +1,4 @@
+using CobolToQuarkusMigration.Agents.Infrastructure.Rekt;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CobolToQuarkusMigration.Models;
@@ -24,8 +25,8 @@ public sealed partial class DependencyEvidenceGate
             var items = children.EnumerateArray().ToArray();
             for (var index = 1; index < items.Length; index++)
                 if (Text(items[index - 1], "token")?.ToUpperInvariant() == option
-                    && Text(items[index], "rule") is not null)
-                    result.Add(option == "MAP" && Text(items[index], "rule") == "Cics_receive_mapContext"
+                    && NativeProducer.HasRule(items[index]))
+                    result.Add(option == "MAP" && NativeProducer.IsRule(items[index], "Cics_receive_mapContext")
                         ? items[index].GetProperty("children")[0] : items[index]);
         }
         return result;
@@ -57,7 +58,7 @@ public sealed partial class DependencyEvidenceGate
             || Text(proof, "operand") != name.Groups[1].Value
             || Text(proof, "usageProof") != "single-native-program:read-only-constant-references"
             || !proof.TryGetProperty("definitionSyntax", out var definition) || !ValidSyntax(definition)
-            || Text(definition, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context")
+            || NativeProducer.RuleOf(definition) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context")
             || !proof.TryGetProperty("ancestorSyntax", out var ancestors) || ancestors.ValueKind != JsonValueKind.Array)
             return null;
         var declaration = Regex.Match(CicsText(definition), "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(name.Groups[1].Value)
@@ -71,7 +72,7 @@ public sealed partial class DependencyEvidenceGate
         foreach (var ancestor in ancestors.EnumerateArray())
         {
             var group = ancestor.ValueKind == JsonValueKind.Object && ValidSyntax(ancestor)
-                && Text(ancestor, "rule") == "DataDescriptionEntryFormat1Context"
+                && NativeProducer.IsRule(ancestor, "DataDescriptionEntryFormat1Context")
                 ? Regex.Match(CicsText(ancestor), "^(0?[1-9]|[1-4][0-9])[A-Za-z][A-Za-z0-9-]*\\.$") : Match.Empty;
             if (!group.Success) return null;
             levels.Add(int.Parse(group.Groups[1].Value));
@@ -101,7 +102,7 @@ public sealed partial class DependencyEvidenceGate
             || resolution.GetProperty("reachingValues").ValueKind != JsonValueKind.Array
             || resolution.GetProperty("definitionSyntax") is not { ValueKind: JsonValueKind.Object } definition
             || !ValidSyntax(definition)
-            || Text(definition, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
+            || NativeProducer.RuleOf(definition) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
             return null;
         var declaration = Regex.Match(CicsText(definition), "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(name.Groups[1].Value)
             + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]{0,3})\)(?:VALUE(?:IS)?(['"])([^'"]*)\3)?\.$""", RegexOptions.IgnoreCase);
@@ -114,7 +115,7 @@ public sealed partial class DependencyEvidenceGate
         foreach (var ancestor in resolution.GetProperty("ancestorSyntax").EnumerateArray())
         {
             var group = ancestor.ValueKind == JsonValueKind.Object && ValidSyntax(ancestor)
-                && Text(ancestor, "rule") == "DataDescriptionEntryFormat1Context"
+                && NativeProducer.IsRule(ancestor, "DataDescriptionEntryFormat1Context")
                 ? Regex.Match(CicsText(ancestor), "^(0?[1-9]|[1-4][0-9])([A-Za-z][A-Za-z0-9-]*)\\.$") : Match.Empty;
             if (!group.Success) return null;
             var groupLevel = int.Parse(group.Groups[1].Value);
@@ -142,7 +143,7 @@ public sealed partial class DependencyEvidenceGate
                 || assignment.EnumerateObject().Any(property => property.Name is not ("syntax" or "sourceResolution"))
                 || !assignment.TryGetProperty("syntax", out var syntax) || syntax.ValueKind != JsonValueKind.Object)
                 return null;
-            var rule = Text(syntax, "rule");
+            var rule = NativeProducer.RuleOf(syntax);
             var body = CicsText(syntax);
             var sourced = assignment.TryGetProperty("sourceResolution", out var source);
             var literal = Regex.Match(body, """^MOVE(['"])([^'"]*)\1TO""" + own + "$", RegexOptions.IgnoreCase);
@@ -194,7 +195,7 @@ public sealed partial class DependencyEvidenceGate
         string[] keys = ["ancestorSyntax", "definitionSyntax", "kind", "memberSyntax", "occurrenceValues", "occursSyntax",
             "operand", "redefinedSyntax", "redefiningSyntax", "subscript", "usageProof", "valueSyntax"];
         bool Entry(JsonElement item) => item.ValueKind == JsonValueKind.Object && ValidSyntax(item)
-            && Text(item, "rule") == "DataDescriptionEntryFormat1Context";
+            && NativeProducer.IsRule(item, "DataDescriptionEntryFormat1Context");
         if (!operandText.Success || resolution.ValueKind != JsonValueKind.Object
             || !resolution.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).SequenceEqual(keys)
             || Text(resolution, "kind") != "immutable-redefined-table-values"
@@ -272,29 +273,36 @@ public sealed partial class DependencyEvidenceGate
     // SEND FROM(area) LENGTH|FLENGTH(n) [WAIT] [ERASE] [RESP/NOHANDLE]: a raw write to the principal facility.
     private static bool PlainSend(JsonElement syntax)
     {
+        if (NativeProducer.IsStarforge) return NativeProducer.PlainSend(NativeProducer.CommandWords(syntax));
         string[] tail = ["Cics_send_from_waitContext", "Cics_send_defaultmaxContext", "Cics_send_lu23Context",
             "Cics_send_from_ctlcharContext", "Cics_send_3560_3270Context", "Cics_send_eraseContext"];
         bool Tail(JsonElement node)
         {
-            if (Text(node, "rule") == "Cics_handle_responseContext") return true;
+            if (NativeProducer.IsRule(node, "Cics_handle_responseContext")) return true;
             if (Text(node, "token") is { } token) return token.ToUpperInvariant() is "WAIT" or "ERASE";
             var children = node.TryGetProperty("children", out var items) ? items.EnumerateArray().ToArray() : [];
-            return tail.Contains(Text(node, "rule"))
-                && (Text(node, "rule") != "Cics_send_eraseContext" || children.Length == 1) && children.All(Tail);
+            return tail.Contains(NativeProducer.RuleOf(node))
+                && (!NativeProducer.IsRule(node, "Cics_send_eraseContext") || children.Length == 1) && children.All(Tail);
         }
         var children = syntax.GetProperty("children").EnumerateArray().ToArray();
-        if (children.Length != 2 || Text(children[1], "rule") != "Cics_send_groupContext") return false;
+        if (children.Length != 2 || !NativeProducer.IsRule(children[1], "Cics_send_groupContext")) return false;
         var parts = children[1].GetProperty("children").EnumerateArray().ToArray();
-        return parts.Length == 2 && Text(parts[0], "rule") == "Cics_send_fromContext" && Tail(parts[1]);
+        return parts.Length == 2 && NativeProducer.IsRule(parts[0], "Cics_send_fromContext") && Tail(parts[1]);
     }
 
     // HANDLE CONDITION name[(label)]...: labels are validated as CICS_LABEL bindings; no RESP/NOHANDLE/WAIT.
     private static bool HandleCondition(JsonElement syntax)
     {
+        if (NativeProducer.IsStarforge)
+        {
+            var words = NativeProducer.CommandWords(syntax);
+            return NativeProducer.IsRule(syntax, "Cics_handle_conditionContext") && words.Count > 2
+                && !words.Skip(2).Any(word => word is "RESP" or "RESP2" or "NOHANDLE");
+        }
         var children = syntax.GetProperty("children").EnumerateArray().ToArray();
-        if (children.Length != 2 || Text(children[1], "rule") != "Cics_handle_conditionContext") return false;
+        if (children.Length != 2 || !NativeProducer.IsRule(children[1], "Cics_handle_conditionContext")) return false;
         var parts = children[1].GetProperty("children").EnumerateArray().ToArray();
-        return parts.Length > 1 && parts.Skip(1).All(part => Text(part, "rule") != "Cics_handle_responseContext");
+        return parts.Length > 1 && parts.Skip(1).All(part => !NativeProducer.IsRule(part, "Cics_handle_responseContext"));
     }
 
     private static void ValidateCicsTerminalEvidence(string identity, DependencyEvidence evidence,
@@ -303,13 +311,13 @@ public sealed partial class DependencyEvidenceGate
         foreach (var requirement in requirements.Where(requirement => requirement.Kind == "EXEC_CICS"))
         {
             var statement = requirement.Evidence;
-            var rule = Text(statement, "grammarRule");
+            var rule = NativeProducer.StatementRule(statement);
             if (rule is not ("Cics_sendContext" or "Cics_receiveContext" or "Cics_returnContext"
                 or "Cics_inquireContext" or "Cics_set_terminalContext" or "Cics_bifContext" or "Cics_handleContext"))
                 continue;
             var syntax = statement.GetProperty("syntax");
             var nodes = CicsNodes(syntax).ToArray();
-            var rules = nodes.Select(node => Text(node, "rule")).ToHashSet();
+            var rules = nodes.SelectMany(NativeProducer.AllRoles).ToHashSet();
             var tokens = nodes.Select(node => Text(node, "token")?.ToUpperInvariant()).OfType<string>().ToArray();
             if (rule == "Cics_returnContext" && tokens.SequenceEqual(["RETURN"]))
             {
@@ -356,10 +364,10 @@ public sealed partial class DependencyEvidenceGate
             }
             var resources = bindings.EnumerateArray().ToArray();
             var local = resources.Where(binding => Text(binding, "kind") is "CICS_DATA" or "CICS_LABEL" or "CICS_CONTEXT").ToArray();
-            var usages = nodes.Where(node => Text(node, "rule") == "ParagraphNameUsageContext"
-                || Text(node, "rule") == "VariableNameUsageContext"
+            var usages = nodes.Where(node => NativeProducer.IsRule(node, "ParagraphNameUsageContext")
+                || NativeProducer.IsRule(node, "VariableNameUsageContext")
                 && node.GetProperty("children").GetArrayLength() > 0
-                && Text(node.GetProperty("children")[0], "rule") == "GeneralIdentifierContext").ToArray();
+                && NativeProducer.IsRule(node.GetProperty("children")[0], "GeneralIdentifierContext")).ToArray();
             var refs = references.EnumerateArray().ToArray();
             var terminals = CicsOperands(syntax, "TERMINAL").SelectMany(CicsNodes).ToArray();
             var associations = CicsOperands(syntax, "ASSOCIATION").SelectMany(CicsNodes).ToArray();
@@ -410,10 +418,10 @@ public sealed partial class DependencyEvidenceGate
                     || rule == "Cics_inquireContext" && name == "EIBTASKN"
                     && associations.Any(node => JsonElement.DeepEquals(node, usage));
                 var kind = context
-                        ? "CICS_CONTEXT" : Text(usage, "rule") == "ParagraphNameUsageContext" ? "CICS_LABEL" : "CICS_DATA";
+                        ? "CICS_CONTEXT" : NativeProducer.IsRule(usage, "ParagraphNameUsageContext") ? "CICS_LABEL" : "CICS_DATA";
                 if (Text(binding, "name") != name || Text(binding, "kind") != kind
                     || Text(reference, "name") != name || Text(reference, "kind") != kind
-                    || Text(reference, "grammarRule") != Text(usage, "rule")) return false;
+                    || Text(reference, "grammarRule") != NativeProducer.NodeName(usage)) return false;
                 if (kind == "CICS_CONTEXT")
                     return Text(binding, "definitionScope") == "cics-execution-interface"
                         && Text(binding, "role") == (name == "EIBTASKN" ? "task-number" : "terminal-id");
@@ -421,9 +429,9 @@ public sealed partial class DependencyEvidenceGate
                     || !binding.TryGetProperty("definitionSyntax", out var definition) || !ValidSyntax(definition))
                     return false;
                 if (kind == "CICS_LABEL")
-                    return Text(definition, "rule") is "ParagraphDefinitionNameContext" or "SectionNameContext"
+                    return NativeProducer.RuleOf(definition) is "ParagraphDefinitionNameContext" or "SectionNameContext"
                         && CicsText(definition).ToUpperInvariant() == name;
-                if (Text(definition, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
+                if (NativeProducer.RuleOf(definition) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
                     return false;
                 var names = CicsNodes(usage).Select(node => Text(node, "token")?.ToUpperInvariant())
                     .OfType<string>().ToArray();
@@ -439,13 +447,13 @@ public sealed partial class DependencyEvidenceGate
                     return false;
                 var ancestors = path.EnumerateArray().ToArray();
                 if (ancestors.Length < 2 || !JsonElement.DeepEquals(ancestors[^1], definition)
-                    || ancestors.Any(item => !ValidSyntax(item) || Text(item, "rule") != "DataDescriptionEntryFormat1Context"))
+                    || ancestors.Any(item => !ValidSyntax(item) || !NativeProducer.IsRule(item, "DataDescriptionEntryFormat1Context")))
                     return false;
                 var levels = ancestors.Select(item => CicsNodes(item).Select(node => Text(node, "token"))
                     .FirstOrDefault(token => token is not null)).ToArray();
                 if (levels.Any(level => !int.TryParse(level, out var number) || number is < 1 or > 49)
                     || levels.Zip(levels.Skip(1)).Any(pair => int.Parse(pair.First!) >= int.Parse(pair.Second!))
-                    || ancestors[..^1].Any(item => CicsNodes(item).Any(node => Text(node, "rule") == "DataPictureClauseContext")))
+                    || ancestors[..^1].Any(item => CicsNodes(item).Any(node => NativeProducer.IsRule(node, "DataPictureClauseContext"))))
                     return false;
                 var search = ancestors[..^1].Reverse().Select(EntryName).ToList();
                 var offset = 0;
@@ -516,8 +524,8 @@ public sealed partial class DependencyEvidenceGate
                 return false;
             var entries = path.EnumerateArray().ToArray();
             if (entries.Length == 0 || !JsonElement.DeepEquals(entries[^1], definition)
-                || entries.Any(item => !ValidSyntax(item) || Text(item, "rule") != "DataDescriptionEntryFormat1Context")
-                || entries.Count(item => CicsNodes(item).Any(node => Text(node, "rule") == "DataOccursClauseContext")) != 1)
+                || entries.Any(item => !ValidSyntax(item) || !NativeProducer.IsRule(item, "DataDescriptionEntryFormat1Context"))
+                || entries.Count(item => CicsNodes(item).Any(node => NativeProducer.IsRule(node, "DataOccursClauseContext"))) != 1)
                 return false;
             var levels = entries.Select(item => CicsNodes(item).Select(node => Text(node, "token"))
                 .FirstOrDefault(token => token is not null)).ToArray();
@@ -526,13 +534,13 @@ public sealed partial class DependencyEvidenceGate
                 return false;
             if (char.IsDigit(names[2][0])) return !binding.TryGetProperty("subscriptSyntax", out _);
             return binding.TryGetProperty("subscriptSyntax", out var subscript) && ValidSyntax(subscript)
-                && Text(subscript, "rule") is "DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"
+                && NativeProducer.RuleOf(subscript) is "DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"
                 && EntryName(subscript) == names[2];
         }
 
         static string? EntryName(JsonElement definition)
         {
-            var entries = CicsNodes(definition).Where(node => Text(node, "rule") == "EntryNameContext").ToArray();
+            var entries = CicsNodes(definition).Where(node => NativeProducer.IsRule(node, "EntryNameContext")).ToArray();
             return entries.Length == 1 ? CicsText(entries[0]).ToUpperInvariant() : entries.Length == 0 ? "FILLER" : null;
         }
     }

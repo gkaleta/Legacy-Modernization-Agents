@@ -126,6 +126,7 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
                 Validate(evidence, identity, file.FilePath, issues);
                 if (issues.Count != startIssues) continue;
 
+                using var producer = NativeProducer.Use(NativeProducer.OfEvidence(evidence.Producer)!);
                 var tree = ReadExportTree(evidence.ExportPath, identity, requireIdentity: true);
                 var export = tree.Direct;
                 FindContradictions(file.FilePath, identity, export,
@@ -244,7 +245,7 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
     private void Validate(DependencyEvidence evidence, string identity, string sourcePath, List<string> issues)
     {
         void Issue(string message) => issues.Add($"{identity}: {message}");
-        if (evidence.SchemaVersion != 1 || evidence.Producer != "cobol-rekt/dependency")
+        if (evidence.SchemaVersion != 1 || NativeProducer.OfEvidence(evidence.Producer) is null)
             Issue("unsupported dependency evidence schema or producer.");
         if (!string.Equals(evidence.RelativePath, identity, StringComparison.Ordinal)
             || !Path.IsPathFullyQualified(evidence.OriginalSourcePath)
@@ -604,6 +605,9 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
             || !(string.Equals(rootName.GetString(), Path.GetFileName(identity), StringComparison.OrdinalIgnoreCase)
                 || string.Equals(rootName.GetString(), identity, StringComparison.Ordinal))))
             throw new InvalidDataException($"{identity}: dependency export source identity mismatch.");
+        if (requireIdentity && NativeProducer.Of(document.RootElement) != NativeProducer.Current)
+            throw new InvalidDataException($"{identity}: dependency export producer does not match the evidence producer " +
+                $"{NativeProducer.Current}.");
         var direct = new List<(string Kind, string Name)>();
         var supporting = new List<(string Kind, string Name)>();
         var runtimeRequirements = new List<RuntimeImplementationRequirement>();
@@ -656,15 +660,14 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
                         || !statement.TryGetProperty("sourceText", out var text)
                         || text.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(text.GetString())
                         || !statement.TryGetProperty("syntax", out var syntax)
-                        || !ValidSyntax(syntax) || !syntax.TryGetProperty("rule", out var syntaxRule)
-                        || syntaxRule.GetString() != grammar.GetString()
+                        || !ValidSyntax(syntax) || NativeProducer.NodeName(syntax) is not { } syntaxRule
+                        || syntaxRule != grammar.GetString()
                         || kind.GetString() == "EXEC_SQL"
                         && (!statement.TryGetProperty("semanticStatus", out var semanticStatus)
                             || semanticStatus.ValueKind != JsonValueKind.String || semanticStatus.GetString() != "complete"
                             || !statement.TryGetProperty("semanticSyntax", out var semanticSyntax)
                             || !ValidSyntax(semanticSyntax)
-                            || !semanticSyntax.TryGetProperty("rule", out var semanticRule)
-                            || semanticRule.GetString() != "StartSqlRuleContext"))
+                            || !NativeProducer.IsRule(semanticSyntax, "StartSqlRuleContext")))
                         throw new InvalidDataException("native dialect statement lacks complete parsed syntax/bindings.");
                     runtimeRequirements.Add(new(program, kind.GetString()!, operation.GetString()!, statement.Clone()));
                 }
@@ -726,6 +729,8 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
         if (syntax.ValueKind != JsonValueKind.Object) return false;
         if (syntax.TryGetProperty("token", out var token))
             return token.ValueKind == JsonValueKind.String && syntax.EnumerateObject().Count() == 1;
+        if (NativeProducer.IsStarforge)
+            return NativeProducer.IsStarforgeNode(syntax) && syntax.GetProperty("children").EnumerateArray().All(ValidSyntax);
         return syntax.TryGetProperty("rule", out var rule) && rule.ValueKind == JsonValueKind.String
             && syntax.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array
             && children.EnumerateArray().All(ValidSyntax);
@@ -934,7 +939,7 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
                         || declarations.Length == 1
                         && Path.GetFileName(declarations[0].Path) != Path.GetFileName(Text(binding, "sourcePath"))
                         || !binding.TryGetProperty("definitionSyntax", out var declarationSyntax)
-                        || Text(declarationSyntax, "rule") != "Dbs_declare_tableContext")
+                        || !NativeProducer.IsRule(declarationSyntax, "Dbs_declare_tableContext"))
                         issues.Add($"{identity}: SQL declaration {Text(binding, "name")} lacks a hash-bound source catalog.");
                 }
         }

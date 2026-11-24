@@ -43,7 +43,7 @@ public static partial class RektEvidence
             return null;
         var definition = Get(resolution, "definitionSyntax");
         if (definition is not JsonObject || Get(resolution, "ancestorSyntax") is not JsonArray ancestors
-            || Str(definition, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
+            || RuleOf(definition) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
             return null;
         var declaration = Full("(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(name.Groups[1].Value)
             + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]?)\)VALUE(?:IS)?(['"])([A-Za-z0-9@$#_-]+)( *)\3\.""",
@@ -54,7 +54,7 @@ public static partial class RektEvidence
         var levels = new List<int>();
         foreach (var ancestor in ancestors)
         {
-            var group = Str(ancestor, "rule") == "DataDescriptionEntryFormat1Context"
+            var group = IsRule(ancestor, "DataDescriptionEntryFormat1Context")
                 ? Full(@"(0?[1-9]|[1-4][0-9])[A-Za-z][A-Za-z0-9-]*\.", SyntaxText(ancestor)) : null;
             if (group is null) return null;
             levels.Add(Int(group, 1));
@@ -70,7 +70,7 @@ public static partial class RektEvidence
     {
         foreach (var ancestor in (JsonArray)ancestors!)
         {
-            var group = Str(ancestor, "rule") == "DataDescriptionEntryFormat1Context"
+            var group = IsRule(ancestor, "DataDescriptionEntryFormat1Context")
                 ? Full(Level + NamePattern + @"\.", SyntaxText(ancestor)) : null;
             if (group is null || Int(group, 1) <= (levels.Count > 0 ? levels[^1] : 0) || levels.Count == 0 && Int(group, 1) != 1)
                 return false;
@@ -84,7 +84,7 @@ public static partial class RektEvidence
     internal static List<string?>? CicsTableOperand(JsonNode? operand, JsonNode? resolution, int minimum, int maximum)
     {
         static bool Entry(JsonNode? syntax) =>
-            Str(syntax, "rule") == "DataDescriptionEntryFormat1Context" && SyntaxNodes(syntax).Count > 0;
+            IsRule(syntax, "DataDescriptionEntryFormat1Context") && SyntaxNodes(syntax).Count > 0;
         string[] lists = ["ancestorSyntax", "memberSyntax", "valueSyntax"];
         var operandText = Full(@"\(" + NamePattern + @"\(" + NamePattern + @"\)\)", SyntaxText(operand));
         if (operandText is null || !KeysAre(resolution, "kind", "operand", "subscript", "definitionSyntax", "ancestorSyntax",
@@ -171,7 +171,7 @@ public static partial class RektEvidence
             || Get(resolution, "assignments") is not JsonArray assignments || !PyJson.IsBool(Get(resolution, "initialReaches"))
             || Get(resolution, "reachingValues") is not JsonArray
             || Get(resolution, "definitionSyntax") is not JsonObject definitionSyntax
-            || Str(definitionSyntax, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
+            || RuleOf(definitionSyntax) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context"))
             return null;
         var definition = Full("(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(name.Groups[1].Value)
             + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]{0,3})\)(?:VALUE(?:IS)?(['"])([^'"]*)\3)?\.""",
@@ -202,7 +202,7 @@ public static partial class RektEvidence
                 if (assignment is not JsonObject || !KeysWithin(assignment, "syntax", "sourceResolution")
                     || Get(assignment, "syntax") is not JsonObject syntax)
                     return null;
-                var rule = Str(syntax, "rule");
+                var rule = RuleOf(syntax);
                 var body = SyntaxText(syntax);
                 var own = Regex.Escape(name.Groups[1].Value) + qualifier;
                 var literal = Full("""MOVE(['"])([^'"]*)\1TO""" + own, body, true);
@@ -235,12 +235,7 @@ public static partial class RektEvidence
             ? reaching : null;
     }
 
-    private static JsonObject NameOperand(string name) => new()
-    {
-        ["rule"] = "Cics_nameContext",
-        ["children"] = new JsonArray(new JsonObject { ["token"] = "(" }, new JsonObject { ["token"] = name },
-            new JsonObject { ["token"] = ")" }),
-    };
+    private static JsonObject NameOperand(string name) => NativeProducer.NameOperand(name);
 
     // Universe of a PIC X slot from every write the native parser listed; closure proofs are rechecked separately.
     internal static List<string?>? CicsSlotOperand(JsonNode? operand, JsonNode? resolution, int minimum, int maximum)
@@ -306,7 +301,7 @@ public static partial class RektEvidence
                     || !KeysWithin(slot, "definitionSyntax", "initialValue", "entry", "writes")
                     || Get(slot, "writes") is not JsonArray writes || !PyJson.IsBool(Get(slot, "entry"))
                     || Get(slot, "definitionSyntax") is not JsonObject definition
-                    || Str(definition, "rule") != "DataDescriptionEntryFormat1Context")
+                    || !IsRule(definition, "DataDescriptionEntryFormat1Context"))
                     return null;
                 var shape = Full(slotPattern, SyntaxText(definition), true);
                 if (shape is null || shape.Groups[2].Value.ToUpperInvariant() != slotName) return null;
@@ -322,7 +317,7 @@ public static partial class RektEvidence
                 foreach (var write in writes)
                 {
                     if (write is not JsonObject || Get(write, "syntax") is not JsonObject syntax) return null;
-                    var rule = Str(syntax, "rule");
+                    var rule = RuleOf(syntax);
                     var body = SyntaxText(syntax);
                     var effect = Str(write, "effect");
                     if (!KeysWithin(write, "effect", "value", "source", "line", "syntax", "sourceResolution")) return null;

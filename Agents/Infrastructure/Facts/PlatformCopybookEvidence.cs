@@ -1,3 +1,4 @@
+using CobolToQuarkusMigration.Agents.Infrastructure.Rekt;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -102,12 +103,12 @@ public sealed partial class DependencyEvidenceGate
     private static bool ValidEvaluateUsage(JsonElement usage, string role)
     {
         var rule = role == "evaluate-subject" ? "EvaluateSelectContext" : "EvaluateWhenContext";
-        if (Text(usage, "grammarRule") != rule
+        if (NativeProducer.StatementRule(usage) != rule
             || Text(usage, "coordinateSpace") != "expanded-parser-input"
             || string.IsNullOrWhiteSpace(Text(usage, "sourceText"))
             || !usage.TryGetProperty("line", out var line) || !line.TryGetInt32(out var number) || number < 1
             || !usage.TryGetProperty("syntax", out var syntax) || !ValidSyntax(syntax)
-            || Text(syntax, "rule") != rule)
+            || NativeProducer.RuleOf(syntax) != rule)
             return false;
         var tokens = PlatformSyntaxTokens(syntax).Select(value => value.ToUpperInvariant()).ToArray();
         return role == "evaluate-subject"
@@ -121,12 +122,12 @@ public sealed partial class DependencyEvidenceGate
         var conjunct = usage.TryGetProperty("conditionRole", out var role);
         if (conjunct && role.GetString() != "application-and-conjunct") return false;
         var rule = conjunct ? "SimpleConditionContext" : "ConditionContext";
-        if (Text(usage, "grammarRule") != rule
+        if (NativeProducer.StatementRule(usage) != rule
             || Text(usage, "coordinateSpace") != "expanded-parser-input"
             || string.IsNullOrWhiteSpace(Text(usage, "sourceText"))
             || !usage.TryGetProperty("line", out var line) || !line.TryGetInt32(out var number) || number < 1
             || !usage.TryGetProperty("syntax", out var syntax) || !ValidSyntax(syntax)
-            || Text(syntax, "rule") != rule || !ValidTerminalComparisons(syntax))
+            || NativeProducer.RuleOf(syntax) != rule || !ValidTerminalComparisons(syntax))
             return false;
         var tokens = PlatformSyntaxTokens(syntax).Select(value => value.ToUpperInvariant()).ToArray();
         if (conjunct && (tokens[0] != "EIBAID" || tokens.Count(TerminalEvents.ContainsKey) != 1)) return false;
@@ -139,7 +140,7 @@ public sealed partial class DependencyEvidenceGate
     private static bool ValidTerminalComparisons(JsonElement syntax, string? parent = null)
     {
         if (syntax.TryGetProperty("token", out _)) return true;
-        var rule = Text(syntax, "rule");
+        var rule = NativeProducer.RuleOf(syntax);
         if (rule == "SimpleConditionContext")
         {
             var tokens = PlatformSyntaxTokens(syntax).Select(value => value.ToUpperInvariant()).ToArray();

@@ -80,7 +80,7 @@ public static partial class RektEvidence
         if (syntax is not JsonObject obj) return [];
         if (obj.Count == 1 && obj.ContainsKey("token"))
             return PyJson.IsStr(obj["token"]) ? [obj] : [];
-        if (!KeysAre(obj, "rule", "children") || !PyJson.IsStr(obj["rule"]) || obj["children"] is not JsonArray children)
+        if (!NativeProducer.IsRuleNode(obj) || obj["children"] is not JsonArray children)
             return [];
         var nodes = new List<JsonObject> { obj };
         foreach (var child in children)
@@ -102,6 +102,21 @@ public static partial class RektEvidence
             if (node.ContainsKey("token")) builder.Append(PyJson.Str(node["token"]));
         return builder.ToString();
     }
+
+    internal static string? RuleOf(JsonNode? node) => NativeProducer.RuleOf(node);
+
+    internal static bool IsRule(JsonNode? node, string role) => NativeProducer.IsRule(node, role);
+
+    internal static bool HasRule(JsonNode? node) => NativeProducer.HasRule(node);
+
+    internal static string? StatementRule(JsonNode? statement) => NativeProducer.StatementRule(statement);
+
+    // Every role of a node: Starforge command nodes also carry their verb form.
+    internal static IEnumerable<string?> Rules(JsonNode? node) =>
+        NativeProducer.IsStarforge ? NativeProducer.Roles(node) : [PyJson.Str(Get(node, "rule"))];
+
+    // The producer's own name for a node: the ANTLR rule or the Starforge node kind.
+    internal static string? NodeName(JsonNode? node) => Str(node, NativeProducer.IsStarforge ? "node" : "rule");
 
     private sealed class Rejected : Exception;
 

@@ -228,7 +228,7 @@ public static class NativeRunActivity
         var evidence = PyJson.Parse(PyCompat.ReadText(evidencePath));
         JsonNode? Field(string key) => RektEvidence.Subscript(evidence, key);
         var source = PyCompat.Resolve(Path.Join(sourceRoot, relativePath));
-        if (!PyJson.PyEquals(Field("schemaVersion"), 1) || PyJson.Str(Field("producer")) != RektEvidence.Producer
+        if (!PyJson.PyEquals(Field("schemaVersion"), 1) || NativeProducer.OfEvidence(PyJson.Str(Field("producer"))) is null
             || PyJson.Str(Field("relativePath")) != relativePath
             || PyCompat.Resolve(RektEvidence.PathArg(Field("originalSourcePath"))) != source
             || !PyJson.PyEquals(Field("originalSourceSha256"), PyCompat.Digest(source)))

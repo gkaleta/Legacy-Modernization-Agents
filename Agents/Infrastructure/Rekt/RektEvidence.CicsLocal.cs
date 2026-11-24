@@ -27,14 +27,14 @@ public static partial class RektEvidence
 
     private static bool NativeCicsLocalBound(JsonNode statement, JsonNode syntax, List<JsonObject> nodes, List<string> tokens)
     {
-        var rule = Str(statement, "grammarRule")!;
+        var rule = StatementRule(statement)!;
         var control = rule is "Cics_handleContext" or "Cics_linkContext" or "Cics_xctlContext";
         var fileOperation = CicsFileOperations.ContainsKey(rule);
         var lockOperation = rule is "Cics_enqContext" or "Cics_deqContext";
         var asynchronous = rule == "Cics_runContext";
         var queue = rule == "Cics_writeqContext";
         var terminal = CicsTerminalOperations.Contains(rule);
-        var inquiry = rule == "Cics_inquireContext" && nodes.Any(node => Str(node, "rule") == "Cics_inquire_programContext");
+        var inquiry = rule == "Cics_inquireContext" && nodes.Any(node => IsRule(node, "Cics_inquire_programContext"));
         var operations = fileOperation ? CicsFileOperations[rule] : [CicsLocalOperations[rule]];
         var operation = Str(statement, "operation");
         if (!operations.Contains(operation) || tokens.Count == 0 || tokens[0].ToUpperInvariant() != operation
@@ -45,31 +45,33 @@ public static partial class RektEvidence
         if (terminal && CicsCompact(Str(statement, "sourceText")!) != CicsCompact(string.Concat(tokens))) return false;
         if (lockOperation && tokens.Count(token => token.ToUpperInvariant() == "RESOURCE") != 1) return false;
         if (rule is "Cics_getContext" or "Cics_putContext" && !nodes.Any(node =>
-                Str(node, "rule") == (rule == "Cics_getContext" ? "Cics_get_channelContext" : "Cics_put_channelContext")))
+                IsRule(node, rule == "Cics_getContext" ? "Cics_get_channelContext" : "Cics_put_channelContext")))
             return false;
         var children = Items(syntax, "children").ToList();
-        var condition = rule == "Cics_handleContext" && children.Count == 2 ? children[1] : null;
-        if (Str(condition, "rule") == "Cics_handle_conditionContext")
+        // A Starforge command node is itself the HANDLE CONDITION form, with CONDITION as its second word.
+        var condition = rule != "Cics_handleContext" ? null : NativeProducer.IsStarforge ? syntax : children.Count == 2 ? children[1] : null;
+        if (IsRule(condition, "Cics_handle_conditionContext"))
         {
             // HANDLE CONDITION name[(label)]...: labels are checked below as CICS_LABEL bindings.
-            var parts = Items(condition, "children").ToList();
-            if (parts.Count < 2 || parts.Skip(1).Any(child => Str(child, "rule") == "Cics_handle_responseContext")) return false;
+            var parts = Items(condition, "children").Skip(NativeProducer.IsStarforge ? 1 : 0).ToList();
+            if (parts.Count < 2 || parts.Skip(1).Any(child => IsRule(child, "Cics_handle_responseContext"))) return false;
         }
         else if (rule == "Cics_handleContext")
         {
             var labels = CicsOperands(syntax, "LABEL").Count;
             var cancels = tokens.Count(token => token.ToUpperInvariant() == "CANCEL");
-            if (!nodes.Any(node => Str(node, "rule") == "Cics_handle_abendContext")
+            if (!nodes.Any(node => IsRule(node, "Cics_handle_abendContext"))
                 || tokens.Any(token => token.ToUpperInvariant() is "PROGRAM" or "RESET")
                 || !(labels == 1 && cancels == 0 || labels == 0 && cancels == 1))
                 return false;
         }
-        JsonNode? operand = null;
-        foreach (var node in nodes.Where(node => Str(node, "rule") == "Cics_link_programContext"))
+        JsonNode? operand = NativeProducer.IsStarforge && IsRule(syntax, "Cics_link_programContext")
+            ? CicsOperands(syntax, "PROGRAM").FirstOrDefault() : null;
+        foreach (var node in nodes.Where(node => !NativeProducer.IsStarforge && IsRule(node, "Cics_link_programContext")))
         {
             var parts = Items(node, "children").ToList();
             for (var index = 1; index < parts.Count && operand is null; index++)
-                if ((Str(parts[index - 1], "token") ?? "").ToUpperInvariant() == "PROGRAM" && Str(parts[index], "rule") == "Cics_nameContext")
+                if ((Str(parts[index - 1], "token") ?? "").ToUpperInvariant() == "PROGRAM" && IsRule(parts[index], "Cics_nameContext"))
                     operand = parts[index];
             if (operand is not null) break;
         }
@@ -80,9 +82,9 @@ public static partial class RektEvidence
         var referenceNodes = new List<JsonObject>();
         foreach (var node in nodes)
         {
-            var label = Str(node, "rule") == "ParagraphNameUsageContext";
-            var data = Str(node, "rule") == "VariableNameUsageContext" && Arr(node, "children") is { Count: > 0 } first
-                && Str(first[0], "rule") == "GeneralIdentifierContext";
+            var label = IsRule(node, "ParagraphNameUsageContext");
+            var data = IsRule(node, "VariableNameUsageContext") && Arr(node, "children") is { Count: > 0 } first
+                && IsRule(first[0], "GeneralIdentifierContext");
             if (!(label || data) || programNodes.Contains(node)) continue;
             var name = SyntaxText(node).ToUpperInvariant();
             var context = rule is "Cics_inquireContext" or "Cics_set_terminalContext" && name == "EIBTRMID" && terminalNodes.Contains(node)
@@ -91,7 +93,7 @@ public static partial class RektEvidence
             {
                 ["kind"] = context ? "CICS_CONTEXT" : label ? "CICS_LABEL" : "CICS_DATA",
                 ["name"] = name,
-                ["grammarRule"] = Str(node, "rule"),
+                ["grammarRule"] = NodeName(node),
             });
             referenceNodes.Add(node);
         }
@@ -119,11 +121,11 @@ public static partial class RektEvidence
                 return false;
             if (kind == "CICS_DATA")
             {
-                if (Str(definition, "rule") is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context")
+                if (RuleOf(definition) is not ("DataDescriptionEntryFormat1Context" or "DataDescriptionEntryFormat1Level77Context")
                     || !NativeCicsDataBound(binding, reference))
                     return false;
             }
-            else if (Str(definition, "rule") is not ("ParagraphDefinitionNameContext" or "SectionNameContext")
+            else if (RuleOf(definition) is not ("ParagraphDefinitionNameContext" or "SectionNameContext")
                      || !StrEquals(Get(binding, "name"), SyntaxText(definition).ToUpperInvariant()))
                 return false;
         }
@@ -146,8 +148,7 @@ public static partial class RektEvidence
             return transactions.Count == 0 && maps.Count == 0 && NativeCicsFileBound(syntax, operation!, files[0]);
         if (rule == "Cics_xctlContext")
             return transactions.Count == 0 && maps.Count == 0
-                && !children.Where(child => Has(child, "token"))
-                    .Any(child => PyJson.PyStr(Get(child, "token")).ToUpperInvariant() is "CHANNEL" or "INPUTMSG" or "INPUTMSGLEN")
+                && !CommandWords(syntax).Any(word => word is "CHANNEL" or "INPUTMSG" or "INPUTMSGLEN")
                 && CicsProgramTargetsBound(syntax, programs, "transfer-control");
         if (inquiry)
             return transactions.Count == 0 && maps.Count == 0 && CicsProgramTargetsBound(syntax, programs, "program-definition-inquiry");
@@ -175,7 +176,7 @@ public static partial class RektEvidence
         if (Str(resolution, "kind") is not ("immutable-working-storage-literal" or "immutable-local-storage-literal")
             || Str(resolution, "operand") != value
             || Str(resolution, "usageProof") != "single-native-program:all-symbol-references-are-cics-program-operands"
-            || Str(definitionSyntax, "rule") != "DataDescriptionEntryFormat1Context")
+            || !IsRule(definitionSyntax, "DataDescriptionEntryFormat1Context"))
             return false;
         var match = Full("01" + Regex.Escape(value) + """PIC(?:TURE)?(?:IS)?X\(0*8\)VALUE(?:IS)?(['"])([A-Z0-9@$#_-]{1,8})( *)\1\.""",
             SyntaxText(definitionSyntax), true);
@@ -186,9 +187,10 @@ public static partial class RektEvidence
 
     private static bool NativeCicsTransactionsBound(List<JsonObject> nodes, List<string> tokens, List<JsonNode?> transactions)
     {
-        var variants = nodes.Where(node => Str(node, "rule") == "Cics_run_transidContext").ToList();
+        var variants = nodes.Where(node => IsRule(node, "Cics_run_transidContext")).ToList();
         if (variants.Count != 1 || tokens.Count(token => token.ToUpperInvariant() == "CHILD") != 1 || transactions.Count == 0) return false;
-        var operand = Items(variants[0], "children").FirstOrDefault(child => Str(child, "rule") == "Cics_nameContext");
+        var operand = NativeProducer.IsStarforge ? CicsOperands(variants[0], "TRANSID").FirstOrDefault()
+            : Items(variants[0], "children").FirstOrDefault(child => IsRule(child, "Cics_nameContext"));
         var text = SyntaxText(operand);
         var value = text.Length >= 2 ? text[1..^1] : "";
         var resolution = Has(transactions[0], "targetResolution") ? Get(transactions[0], "targetResolution") : new JsonObject();
@@ -209,7 +211,7 @@ public static partial class RektEvidence
                          ("loopHeaderSyntax", "PerformTypeContext"), ("stringSyntax", "StringStatementContext") })
             {
                 var syntax = Get(resolution, key);
-                if (syntax is not JsonObject || Str(syntax, "rule") != rule || SyntaxNodes(syntax).Count == 0) return false;
+                if (syntax is not JsonObject || RuleOf(syntax) != rule || SyntaxNodes(syntax).Count == 0) return false;
                 texts[key] = SyntaxText(syntax);
             }
             var counter = Str(resolution, "counter");

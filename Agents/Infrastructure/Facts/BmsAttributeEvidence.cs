@@ -1,3 +1,4 @@
+using CobolToQuarkusMigration.Agents.Infrastructure.Rekt;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -165,7 +166,7 @@ public sealed partial class DependencyEvidenceGate
             || (tokens.Length - 3) % 4 != 0 || bindings.GetArrayLength() == 0
             || bindings.GetArrayLength() != (tokens.Length - 3) / 4) return false;
         string[]? Words(JsonElement syntax) =>
-            syntax.ValueKind == JsonValueKind.Object && ValidSyntax(syntax) && Text(syntax, "rule") == "DataDescriptionEntryFormat1Context"
+            syntax.ValueKind == JsonValueKind.Object && ValidSyntax(syntax) && NativeProducer.IsRule(syntax, "DataDescriptionEntryFormat1Context")
                 ? PlatformSyntaxTokens(syntax).Select(token => token.Trim()).Where(token => token.Length > 0).ToArray() : null;
         var position = 3;
         foreach (var binding in bindings.EnumerateArray())
@@ -212,12 +213,12 @@ public sealed partial class DependencyEvidenceGate
     {
         if (usage.TryGetProperty("overlayBindings", out _))
         {
-            if (Text(usage, "grammarRule") != "MoveStatementContext"
+            if (NativeProducer.StatementRule(usage) != "MoveStatementContext"
                 || Text(usage, "coordinateSpace") != "expanded-parser-input"
                 || string.IsNullOrWhiteSpace(Text(usage, "sourceText"))
                 || !usage.TryGetProperty("line", out var overlayLine) || !overlayLine.TryGetInt32(out var overlayNumber) || overlayNumber < 1
                 || !usage.TryGetProperty("syntax", out var overlaySyntax) || !ValidSyntax(overlaySyntax)
-                || Text(overlaySyntax, "rule") != "MoveStatementContext") return false;
+                || !NativeProducer.IsRule(overlaySyntax, "MoveStatementContext")) return false;
             var overlayTokens = PlatformSyntaxTokens(overlaySyntax).Select(NormalizeBmsToken).ToArray();
             if (overlayTokens.Length < 7 || overlayTokens[0] != "MOVE" || overlayTokens[2] != "TO") return false;
             var overlayValue = overlayTokens[1];
@@ -227,14 +228,14 @@ public sealed partial class DependencyEvidenceGate
         }
         var bindings = BmsBindings(usage);
         if (bindings is null
-            || Text(usage, "grammarRule") != "MoveStatementContext"
+            || NativeProducer.StatementRule(usage) != "MoveStatementContext"
             || Text(usage, "coordinateSpace") != "expanded-parser-input"
             || string.IsNullOrWhiteSpace(Text(usage, "sourceText"))
             || !usage.TryGetProperty("line", out var line) || !line.TryGetInt32(out var number) || number < 1
             || !usage.TryGetProperty("syntax", out var syntax) || !ValidSyntax(syntax)
-            || Text(syntax, "rule") != "MoveStatementContext"
+            || !NativeProducer.IsRule(syntax, "MoveStatementContext")
             || bindings.Value.Declarations.Any(declaration => !ValidSyntax(declaration)
-                || Text(declaration, "rule") != "DataDescriptionEntryFormat1Context")) return false;
+                || !NativeProducer.IsRule(declaration, "DataDescriptionEntryFormat1Context"))) return false;
         var tokens = PlatformSyntaxTokens(syntax).Select(NormalizeBmsToken).ToArray();
         if (tokens.Length < 4 || tokens[0] != "MOVE" || tokens[2] != "TO") return false;
         var targets = new List<(string Name, string? Group)>();

@@ -132,7 +132,7 @@ public static class PlatformCopybookContracts
 
     private static List<string>? Words(JsonNode? syntax)
     {
-        if (syntax is not JsonObject || Str(syntax, "rule") != "DataDescriptionEntryFormat1Context") return null;
+        if (syntax is not JsonObject || !IsRule(syntax, "DataDescriptionEntryFormat1Context")) return null;
         var nodes = SyntaxNodes(syntax);
         return nodes.Count == 0 ? null
             : Tokens(nodes).Select(token => token.Trim()).Where(token => token.Length > 0).ToList();
@@ -186,8 +186,8 @@ public static class PlatformCopybookContracts
         var line = IsInt(Get(usage, "line"), out var number) ? number : (long?)null;
         var sourceText = Str(usage, "sourceText");
         if (Has(usage, "overlayBindings"))
-            return Str(usage, "grammarRule") == "MoveStatementContext"
-                && Str(Get(usage, "syntax"), "rule") == "MoveStatementContext"
+            return StatementRule(usage) == "MoveStatementContext"
+                && IsRule(Get(usage, "syntax"), "MoveStatementContext")
                 && Str(usage, "coordinateSpace") == "expanded-parser-input"
                 && line >= 1 && sourceText is not null && sourceText.Trim().Length > 0
                 && tokens.Count >= 7 && tokens[0] == "MOVE" && tokens[2] == "TO"
@@ -203,12 +203,12 @@ public static class PlatformCopybookContracts
         {
             return false;
         }
-        if (Str(usage, "grammarRule") != "MoveStatementContext"
-            || Str(Get(usage, "syntax"), "rule") != "MoveStatementContext"
+        if (StatementRule(usage) != "MoveStatementContext"
+            || !IsRule(Get(usage, "syntax"), "MoveStatementContext")
             || Str(usage, "coordinateSpace") != "expanded-parser-input"
             || line is null or < 1 || sourceText is null || sourceText.Trim().Length == 0
             || tokens.Count < 4 || tokens[0] != "MOVE" || tokens[2] != "TO"
-            || declarations.Any(declaration => Str(declaration, "rule") != "DataDescriptionEntryFormat1Context"))
+            || declarations.Any(declaration => !IsRule(declaration, "DataDescriptionEntryFormat1Context")))
             return false;
         var targets = new List<(string Name, string? Group)>();
         var index = 3;

@@ -37,7 +37,9 @@ public static partial class RektEvidence
     {
         var source = PyCompat.Resolve(Path.Join(sourceRoot, relativePath));
         var evidence = ReadJson(Path.Join(outputRoot, relativePath + ".report", "dependency-evidence.json"));
-        if (!PyJson.PyEquals(Subscript(evidence, "schemaVersion"), 1) || !StrEquals(Subscript(evidence, "producer"), Producer)
+        if (NativeProducer.OfEvidence(PyJson.Str(Subscript(evidence, "producer"))) is not { } engine) return false;
+        using var producer = NativeProducer.Use(engine);
+        if (!PyJson.PyEquals(Subscript(evidence, "schemaVersion"), 1)
             || !StrEquals(Subscript(evidence, "relativePath"), relativePath)
             || PyCompat.Resolve(PathArg(Subscript(evidence, "originalSourcePath"))) != source
             || DigestMismatch(Subscript(evidence, "originalSourceSha256"), source)
@@ -69,7 +71,7 @@ public static partial class RektEvidence
         // A non-object export escapes as an error so the activity journal reports it as unverified, not incomplete.
         if (document is not JsonObject)
             throw new PyError("AttributeError", "export is not a JSON object");
-        if (!PyJson.PyEquals(Get(document, "dependencyExportSchemaVersion"), 1)
+        if (!PyJson.PyEquals(Get(document, "dependencyExportSchemaVersion"), 1) || NativeProducer.Of(document) != engine
             || CommareaClosureBindings(document!, outputRoot, relativePath).Problem is not null
             || !PyJson.PyEquals(Get(document, "dependencyCoverage"), Subscript(evidence, "coverage"))
             || MissingNativeOperations(source, document).Count > 0)
@@ -202,7 +204,7 @@ public static partial class RektEvidence
                 StrEquals(Subscript(definition, "kind"), "CICS_DATASET") && PyJson.PyEquals(Subscript(definition, "name"), Get(dataset, "name"))
                 && PyJson.PyEquals(Subscript(definition, "sha256"), Get(dataset, "sourceSha256")))))
             return false;
-        var transfer = ContinuationRules.Contains(Str(statement, "grammarRule"));
+        var transfer = ContinuationRules.Contains(StatementRule(statement));
         return !StrEquals(kind, "CICS_PROGRAM") || (definitions.Any(definition =>
                 StrEquals(Subscript(definition, "kind"), transfer ? "CICS_CONTINUATION" : "CALL")
                 && PyJson.PyEquals(Subscript(definition, "name"), Get(binding, "name"))

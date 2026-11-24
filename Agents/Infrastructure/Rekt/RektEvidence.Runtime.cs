@@ -180,9 +180,9 @@ public static partial class RektEvidence
             throw PyError.Value("invalid native platform syntax");
         if (KeysAre(syntax, "token") && Str(syntax, "token") is { } token)
             return [token.ToUpperInvariant()];
-        if (!KeysAre(syntax, "rule", "children") || Get(syntax, "children") is not JsonArray children)
+        if (!NativeProducer.IsRuleNode(syntax) || Get(syntax, "children") is not JsonArray children)
             throw PyError.Value("invalid native platform grammar");
-        var rule = Str(syntax, "rule");
+        var rule = RuleOf(syntax);
         var tokens = children.SelectMany(child => PlatformSyntaxTokens(child, rule)).ToList();
         if (rule == "SimpleConditionContext")
         {
@@ -201,7 +201,7 @@ public static partial class RektEvidence
     {
         if (KeysAre(syntax, "token") && Str(syntax, "token") is { } token)
             return [token.ToUpperInvariant()];
-        if (!KeysAre(syntax, "rule", "children") || Get(syntax, "children") is not JsonArray children)
+        if (!NativeProducer.IsRuleNode(syntax) || Get(syntax, "children") is not JsonArray children)
             throw PyError.Value("invalid native platform grammar");
         return children.SelectMany(PlatformFlatTokens).ToList();
     }
@@ -259,7 +259,7 @@ public static partial class RektEvidence
                         if (usages[position + 1] is not JsonObject) return false;
                         following = Str(usages[position + 1], "conditionRole");
                     }
-                    if (Str(usage, "grammarRule") != evaluateRule || Str(syntax, "rule") != evaluateRule
+                    if (StatementRule(usage) != evaluateRule || RuleOf(syntax) != evaluateRule
                         || Str(usage, "coordinateSpace") != "expanded-parser-input"
                         || line is null or < 1 || sourceText is null || sourceText.Trim().Length == 0
                         || role == "evaluate-subject" && (!flat.SequenceEqual(["EIBAID"]) || following != "evaluate-when")
@@ -274,8 +274,8 @@ public static partial class RektEvidence
                 // An EIBAID equality ANDed with application relations is recorded as its own conjunct.
                 var rule = role == "application-and-conjunct" ? "SimpleConditionContext" : "ConditionContext";
                 var set = tokens.ToHashSet(StringComparer.Ordinal);
-                if (Str(usage, "grammarRule") != rule
-                    || Str(syntax, "rule") != rule
+                if (StatementRule(usage) != rule
+                    || RuleOf(syntax) != rule
                     || rule == "SimpleConditionContext"
                     && (tokens.Count == 0 || tokens[0] != "EIBAID" || tokens.Count(symbols.ContainsKey) != 1)
                     || Str(usage, "coordinateSpace") != "expanded-parser-input"
@@ -305,17 +305,13 @@ public static partial class RektEvidence
         var operand = Str(resolution, "operand");
         var syntax = Get(resolution, "callSyntax");
         if (operand is null || Full("[A-Z][A-Z0-9-]*", operand) is null
-            || syntax is not JsonObject || Str(syntax, "rule") != "CallStatementContext")
+            || syntax is not JsonObject || !IsRule(syntax, "CallStatementContext"))
             return false;
         var tokens = Tokens(SyntaxNodes(syntax)).Select(token => token.ToUpperInvariant()).ToList();
         if (tokens.Count < 2 || tokens[0] != "CALL" || tokens[1] != operand
             || tokens.Count > 2 && !CallOperandFollowers.Contains(tokens[2]))
             return false;
-        var synthetic = new JsonObject
-        {
-            ["rule"] = "Cics_nameContext",
-            ["children"] = new JsonArray(new JsonObject { ["token"] = "(" }, new JsonObject { ["token"] = operand }, new JsonObject { ["token"] = ")" }),
-        };
+        var synthetic = NativeProducer.NameOperand(operand);
         var value = CicsConstantOperand(synthetic, Get(resolution, "targetResolution"), 1, 8);
         return value is not null && value.ToUpperInvariant() == name;
     }

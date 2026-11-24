@@ -35,8 +35,11 @@ public static partial class RektEvidence
     }
 
     public static JsonObject BuildEvidence(string sourceRoot, string relativePath, string outputRoot, int exportExitCode,
-        string? stagingRoot = null, string? parserSourceRoot = null, string? dependencyProfile = null, string? sqlDeclarations = null)
+        string? stagingRoot = null, string? parserSourceRoot = null, string? dependencyProfile = null, string? sqlDeclarations = null,
+        string engine = NativeProducer.Rekt)
     {
+        if (engine is not (NativeProducer.Rekt or NativeProducer.Starforge)) throw PyError.Value($"unknown-native-producer:{engine}");
+        using var producer = NativeProducer.Use(engine);
         sourceRoot = PyCompat.Resolve(sourceRoot);
         outputRoot = PyCompat.Resolve(outputRoot);
         var source = PyCompat.Resolve(Path.Join(sourceRoot, relativePath));
@@ -50,7 +53,7 @@ public static partial class RektEvidence
         var result = new JsonObject
         {
             ["schemaVersion"] = 1,
-            ["producer"] = Producer,
+            ["producer"] = NativeProducer.EvidenceProducer,
             ["relativePath"] = relativePath,
             ["originalSourcePath"] = source,
             ["originalSourceSha256"] = PyCompat.Digest(source),
@@ -107,6 +110,10 @@ public static partial class RektEvidence
             try
             {
                 exportDocument = ReadJson(exportPath);
+                // The export must come from the engine the pipeline ran: its syntax is read with that engine's rules.
+                if (NativeProducer.Of(exportDocument) is not { } declared)
+                    throw PyError.Value($"unknown-native-producer:{NativeProducer.Declared(exportDocument)}");
+                if (declared != engine) throw PyError.Value($"native-producer-mismatch:{declared}!={engine}");
                 (copies, calls) = ExportedNames(exportDocument, Path.GetFileName(source));
                 exportValid = true;
                 coverage["COPY"] = "partial";
@@ -319,10 +326,10 @@ public static partial class RektEvidence
     });
 
     public static int Write(string sourceRoot, string relativePath, string outputRoot, int exportExitCode, string? stagingRoot,
-        string? parserSourceRoot, string? dependencyProfile, string? sqlDeclarations)
+        string? parserSourceRoot, string? dependencyProfile, string? sqlDeclarations, string engine = NativeProducer.Rekt)
     {
         var evidence = BuildEvidence(sourceRoot, relativePath, outputRoot, exportExitCode, stagingRoot, parserSourceRoot,
-            dependencyProfile, sqlDeclarations);
+            dependencyProfile, sqlDeclarations, engine);
         WriteJson(Path.Join(outputRoot, relativePath + ".report", "dependency-evidence.json"), evidence);
         return Arr(evidence, "unresolvedDiagnostics")!.Any(item => PyJson.Str(item) is { } text
             && (text.StartsWith("dependency-export-failed:", StringComparison.Ordinal) || text.StartsWith("dependency-export-invalid:", StringComparison.Ordinal)))
