@@ -136,6 +136,63 @@ public sealed class TokenAccounting
         }
     }
 
+    // Moves characters a previous stage claimed under (fromClass, fromReason) to (toClass, toReason), keeping the
+    // per-reason totals and listed ranges consistent; Promote alone would leave the old reason counted.
+    public int Reclassify(int unitId, int start, int end, CoverageClass fromClass, string fromReason, CoverageClass toClass, string toReason)
+    {
+        var arr = _classes[unitId];
+        var text = _units[unitId].Source.Text;
+        start = Math.Max(0, start);
+        end = Math.Min(end, arr.Length);
+        if (end <= start)
+        {
+            return 0;
+        }
+
+        var moved = new bool[end - start];
+        var total = 0;
+        for (var m = 0; m < _marks.Count; m++)
+        {
+            var mark = _marks[m];
+            if (mark.Unit != unitId || mark.Class != fromClass || mark.Reason != fromReason || mark.End <= start || mark.Start >= end)
+            {
+                continue;
+            }
+
+            var taken = 0;
+            for (var i = Math.Max(start, mark.Start); i < Math.Min(end, mark.End); i++)
+            {
+                if (!moved[i - start] && arr[i] == (byte)fromClass && !char.IsWhiteSpace(text[i]))
+                {
+                    moved[i - start] = true;
+                    arr[i] = (byte)toClass;
+                    taken++;
+                }
+            }
+
+            taken = Math.Min(taken, mark.Chars);
+            if (taken == 0)
+            {
+                continue;
+            }
+
+            total += taken;
+            _marks[m] = mark with { Chars = mark.Chars - taken };
+            var key = (fromClass, fromReason);
+            _reasonCounts[key] -= taken;
+        }
+
+        _marks.RemoveAll(m => m.Chars == 0);
+        if (total > 0 && toClass is not (CoverageClass.Lexed or CoverageClass.Parsed))
+        {
+            var key = (toClass, toReason);
+            _reasonCounts[key] = _reasonCounts.TryGetValue(key, out var n) ? n + total : total;
+            _marks.Add((unitId, start, end, toClass, toReason, total));
+        }
+
+        return total;
+    }
+
     // Replacement text is owned by the directive that supplied it, so only original characters are claimed here.
     public void MarkExpanded(OriginText text, int start, int end, CoverageClass cls, string reason)
     {

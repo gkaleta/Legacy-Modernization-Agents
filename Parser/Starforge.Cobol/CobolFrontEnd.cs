@@ -69,6 +69,9 @@ public sealed class CompilationResult
     public int ExpandedCodeLines => Units.Sum(u => u.Source.Lines.Count(l => l.Kind is SourceLineKind.Code or SourceLineKind.Continuation));
 
     public CoverageReport RebuildCoverage() => Coverage = Accounting.BuildReport();
+
+    // Later passes (EXEC, statement parsers) report here so one list holds every diagnostic of the program.
+    public void AddDiagnostics(IEnumerable<Diagnostic> diagnostics) => ((List<Diagnostic>)Diagnostics).AddRange(diagnostics);
 }
 
 // Thread-safe: one instance can process many programs in parallel and shares the copybook cache between them.
