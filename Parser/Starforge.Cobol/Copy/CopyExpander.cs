@@ -1,0 +1,272 @@
+using System.Collections.Concurrent;
+using Starforge.Cobol.Coverage;
+using Starforge.Cobol.Source;
+
+namespace Starforge.Cobol.Copy;
+
+// Thread-safe cache of copybook readings shared across programs of one run.
+public sealed class SourceCache
+{
+    private readonly ConcurrentDictionary<(string Path, bool Debug), Lazy<LogicalSource>> _map = new();
+
+    public LogicalSource GetCopybook(string path, bool debuggingMode)
+        => _map.GetOrAdd(
+            (path, debuggingMode),
+            key => new Lazy<LogicalSource>(() => SourceReader.Read(SourceFile.Load(key.Path), new SourceReaderOptions(key.Debug, IsProgram: false)))).Value;
+}
+
+public sealed record CopyExpansionOptions(int MaxDepth = 50, bool DebuggingMode = false);
+
+internal sealed class CopyExpander
+{
+    private readonly CopybookResolver _resolver;
+    private readonly SourceCache _cache;
+    private readonly TokenAccounting _accounting;
+    private readonly List<Diagnostic> _diagnostics;
+    private readonly List<CopyInclusion> _inclusions;
+    private readonly CopyExpansionOptions _options;
+    private readonly List<string> _active = new();
+    private string _programPath = string.Empty;
+
+    public CopyExpander(CopybookResolver resolver, SourceCache cache, TokenAccounting accounting, List<Diagnostic> diagnostics, List<CopyInclusion> inclusions, CopyExpansionOptions options)
+    {
+        _resolver = resolver;
+        _cache = cache;
+        _accounting = accounting;
+        _diagnostics = diagnostics;
+        _inclusions = inclusions;
+        _options = options;
+    }
+
+    public OriginText ExpandProgram(SourceUnit program)
+    {
+        _programPath = program.Path;
+        var builder = new OriginTextBuilder(program.Source.Text.Length * 2);
+        _active.Add(Path.GetFullPath(program.Path));
+        ExpandUnit(program, builder);
+        _active.RemoveAt(_active.Count - 1);
+        return builder.Build();
+    }
+
+    private void ExpandUnit(SourceUnit unit, OriginTextBuilder output)
+    {
+        var source = OriginText.ForUnit(unit.Id, unit.Source.Text);
+        var text = source.Text;
+        var words = TextWordScanner.Scan(text, 0, text.Length);
+        var cursor = 0;
+        for (var i = 0; i < words.Count; i++)
+        {
+            var w = words[i];
+            if (w.Kind != TextWordKind.Word)
+            {
+                continue;
+            }
+
+            if (ReplacingParser.Is(text, w, "EXEC") || ReplacingParser.Is(text, w, "EXECUTE"))
+            {
+                var j = i + 1;
+                while (j < words.Count && !ReplacingParser.Is(text, words[j], "END-EXEC"))
+                {
+                    j++;
+                }
+
+                if (j < words.Count && j == i + 4
+                    && ReplacingParser.Is(text, words[i + 1], "SQL")
+                    && ReplacingParser.Is(text, words[i + 2], "INCLUDE")
+                    && words[i + 3].Kind is TextWordKind.Word or TextWordKind.Literal)
+                {
+                    var endWord = j + 1 < words.Count && words[j + 1].Kind == TextWordKind.Period ? j + 1 : j;
+                    var name = text.Substring(words[i + 3].Start, words[i + 3].Length);
+                    output.Append(source, cursor, w.Start);
+                    Include(unit, output, CopyStatementKind.SqlInclude, w.Start, words[endWord].End, name, null, false, Array.Empty<ReplacingPair>());
+                    cursor = words[endWord].End;
+                    i = endWord;
+                    continue;
+                }
+
+                i = Math.Min(j, words.Count - 1);
+                continue;
+            }
+
+            if (ReplacingParser.Is(text, w, "REPLACE") && ReplaceStage.LooksLikeReplace(text, words, i))
+            {
+                var stmt = ReplaceStage.Parse(source, words, i);
+                i = stmt.EndWord;
+                continue;
+            }
+
+            if (!ReplacingParser.Is(text, w, "COPY"))
+            {
+                continue;
+            }
+
+            var copy = ParseCopy(source, words, i);
+            output.Append(source, cursor, copy.Start);
+            if (copy.Error is { Code: "copy-period-expected" })
+            {
+                // The compiler would flag this, but the intent is unambiguous, so the copybook is still included.
+                _diagnostics.Add(Diagnostic.Create("copy-period-expected", DiagnosticSeverity.Warning, copy.Error.Message, unit.Source.RangeOf(copy.Start, copy.End), string.Empty));
+                Include(unit, output, CopyStatementKind.Copy, copy.Start, copy.End, copy.Name, copy.Library, copy.Suppress, copy.Pairs);
+            }
+            else if (copy.Error is not null)
+            {
+                var range = unit.Source.RangeOf(copy.Start, copy.End);
+                _diagnostics.Add(Diagnostic.Create("malformed-copy-statement", DiagnosticSeverity.Error, $"{copy.Error.Message} ({copy.Error.Code})", range, copy.Error.Code));
+                _accounting.Mark(unit.Id, copy.Start, copy.End, CoverageClass.Unsupported, "malformed-copy-statement");
+                _inclusions.Add(new CopyInclusion(CopyStatementKind.Copy, copy.Name, copy.Library, copy.Suppress, copy.Pairs.Count, unit.Id, -1, range, CopyStatus.Malformed, null, null, Array.Empty<string>()));
+            }
+            else
+            {
+                Include(unit, output, CopyStatementKind.Copy, copy.Start, copy.End, copy.Name, copy.Library, copy.Suppress, copy.Pairs);
+            }
+
+            cursor = copy.End;
+            i = copy.EndWord;
+        }
+
+        output.Append(source, cursor, text.Length);
+    }
+
+    private void Include(SourceUnit parent, OriginTextBuilder output, CopyStatementKind kind, int start, int end, string rawName, string? library, bool suppress, IReadOnlyList<ReplacingPair> pairs)
+    {
+        var range = parent.Source.RangeOf(start, end);
+        var name = CopybookResolver.NormalizeName(rawName);
+        var resolution = _resolver.Resolve(name, library, parent.Path, _programPath);
+        var label = name.ToUpperInvariant();
+
+        void Fail(CopyStatus status, string code, string message)
+        {
+            _diagnostics.Add(Diagnostic.Create(code, DiagnosticSeverity.Error, message, range, label));
+            _accounting.Mark(parent.Id, start, end, CoverageClass.Unresolved, $"{code}:{label}");
+            _inclusions.Add(new CopyInclusion(kind, name, library, suppress, pairs.Count, parent.Id, -1, range, status, resolution.Path, resolution.Stage, resolution.OtherCandidates));
+        }
+
+        if (!resolution.Found)
+        {
+            Fail(CopyStatus.Missing, "missing-copybook", $"Copybook {name} not found in the program folder, estate folders or .preprocessed");
+            return;
+        }
+
+        var full = Path.GetFullPath(resolution.Path!);
+        if (_active.Contains(full, StringComparer.Ordinal))
+        {
+            Fail(CopyStatus.Cycle, "copy-cycle", $"Copybook {name} includes itself through {string.Join(" -> ", _active.Select(Path.GetFileName))}");
+            return;
+        }
+
+        if (parent.Depth + 1 > _options.MaxDepth)
+        {
+            Fail(CopyStatus.DepthExceeded, "copy-depth-exceeded", $"COPY nesting deeper than {_options.MaxDepth}");
+            return;
+        }
+
+        LogicalSource childSource;
+        try
+        {
+            childSource = _cache.GetCopybook(resolution.Path!, _options.DebuggingMode);
+        }
+        catch (IOException ex)
+        {
+            Fail(CopyStatus.ReadError, "copybook-read-error", $"Copybook {name} could not be read: {ex.Message}");
+            return;
+        }
+
+        _accounting.Mark(parent.Id, start, end, CoverageClass.Directive, kind == CopyStatementKind.Copy ? "copy-statement" : "sql-include");
+        var child = new SourceUnit(_accounting.Units.Count, kind == CopyStatementKind.Copy ? SourceUnitKind.Copybook : SourceUnitKind.SqlInclude, childSource, parent.Id, name, library, range, parent.Depth + 1, pairs.Count > 0);
+        _accounting.Register(child);
+        _diagnostics.AddRange(childSource.Diagnostics);
+        _inclusions.Add(new CopyInclusion(kind, name, library, suppress, pairs.Count, parent.Id, child.Id, range, CopyStatus.Resolved, resolution.Path, resolution.Stage, resolution.OtherCandidates));
+
+        if (!char.IsWhiteSpace(output.LastChar))
+        {
+            output.AppendSynthetic(" ");
+        }
+
+        _active.Add(full);
+        if (pairs.Count == 0)
+        {
+            ExpandUnit(child, output);
+        }
+        else
+        {
+            var temp = new OriginTextBuilder(childSource.Text.Length + 64);
+            ExpandUnit(child, temp);
+            var copied = temp.Build();
+            var replaced = Replacer.Apply(copied, 0, copied.Length, pairs, output, (s, e) => _accounting.MarkExpanded(copied, s, e, CoverageClass.Directive, "replaced-by-copy-replacing"));
+            if (replaced == 0)
+            {
+                _diagnostics.Add(Diagnostic.Create("replacing-no-match", DiagnosticSeverity.Info, $"COPY {name} REPLACING matched nothing in the copybook", range, label));
+            }
+        }
+
+        _active.RemoveAt(_active.Count - 1);
+        if (!char.IsWhiteSpace(output.LastChar))
+        {
+            output.AppendSynthetic("\n");
+        }
+    }
+
+    private static CopyStatement ParseCopy(OriginText source, List<TextWord> words, int i)
+    {
+        var text = source.Text;
+        var start = words[i].Start;
+        var j = i + 1;
+        if (j >= words.Count || words[j].Kind is not (TextWordKind.Word or TextWordKind.Literal) || ReplacingParser.Is(text, words[j], "REPLACING"))
+        {
+            return new CopyStatement(i, start, words[i].End, string.Empty, null, false, new List<ReplacingPair>(),
+                new ParseError("copy-name-expected", "COPY must be followed by a text name", start, words[i].End));
+        }
+
+        var name = text.Substring(words[j].Start, words[j].Length);
+        j++;
+        string? library = null;
+        if (j + 1 < words.Count && (ReplacingParser.Is(text, words[j], "OF") || ReplacingParser.Is(text, words[j], "IN"))
+            && words[j + 1].Kind is TextWordKind.Word or TextWordKind.Literal)
+        {
+            library = text.Substring(words[j + 1].Start, words[j + 1].Length);
+            j += 2;
+        }
+
+        var suppress = false;
+        if (j < words.Count && ReplacingParser.Is(text, words[j], "SUPPRESS"))
+        {
+            suppress = true;
+            j++;
+        }
+
+        var pairs = new List<ReplacingPair>();
+        if (j < words.Count && ReplacingParser.Is(text, words[j], "REPLACING"))
+        {
+            j++;
+            while (j < words.Count && words[j].Kind != TextWordKind.Period)
+            {
+                var pair = ReplacingParser.ParsePair(source, words, ref j, pseudoTextOnly: false, out var error);
+                if (pair is null)
+                {
+                    var stop = Math.Min(j, words.Count - 1);
+                    return new CopyStatement(stop, start, words[stop].End, name, library, suppress, pairs, error);
+                }
+
+                pairs.Add(pair);
+            }
+
+            if (pairs.Count == 0)
+            {
+                var stop = Math.Min(j, words.Count - 1);
+                return new CopyStatement(stop, start, words[stop].End, name, library, suppress, pairs,
+                    new ParseError("replacing-operand-expected", "REPLACING must be followed by at least one operand pair", start, words[stop].End));
+            }
+        }
+
+        if (j < words.Count && words[j].Kind == TextWordKind.Period)
+        {
+            return new CopyStatement(j, start, words[j].End, name, library, suppress, pairs, null);
+        }
+
+        var last = j - 1;
+        return new CopyStatement(last, start, words[last].End, name, library, suppress, pairs,
+            new ParseError("copy-period-expected", "COPY statement must end with a separator period", start, words[last].End));
+    }
+
+    private sealed record CopyStatement(int EndWord, int Start, int End, string Name, string? Library, bool Suppress, List<ReplacingPair> Pairs, ParseError? Error);
+}

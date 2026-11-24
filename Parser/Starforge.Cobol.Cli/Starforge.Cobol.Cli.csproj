@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>Starforge.Cobol.Cli</RootNamespace>
+    <AssemblyName>starforge</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- Same reason as the root project: run via dotnet.exe so endpoint security does not block an unsigned launcher. -->
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Starforge.Cobol\Starforge.Cobol.csproj" />
+  </ItemGroup>
+
+</Project>

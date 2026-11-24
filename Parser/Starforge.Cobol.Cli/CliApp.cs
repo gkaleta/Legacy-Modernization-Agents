@@ -1,0 +1,127 @@
+namespace Starforge.Cobol.Cli;
+
+public static class CliApp
+{
+    public const string Usage = """
+        Usage:
+          starforge coverage --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rekt-baseline <dir>]
+          starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>]
+          starforge diff-rekt
+        """;
+
+    public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
+    {
+        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        {
+            stdout.WriteLine(Usage);
+            return args.Length == 0 ? 2 : 0;
+        }
+
+        try
+        {
+            var parsed = CommandLine.Parse(args.Skip(1));
+            return args[0] switch
+            {
+                "coverage" => CoverageCommand.Run(parsed, stdout, stderr),
+                "parse" => ParseCommand.Run(parsed, stdout, stderr),
+                "diff-rekt" => NotYet(stderr),
+                _ => UnknownCommand(args[0], stderr),
+            };
+        }
+        catch (UsageException ex)
+        {
+            stderr.WriteLine($"error: {ex.Message}");
+            stderr.WriteLine(Usage);
+            return 2;
+        }
+    }
+
+    private static int NotYet(TextWriter stderr)
+    {
+        stderr.WriteLine("diff-rekt is not implemented until M5");
+        return 2;
+    }
+
+    private static int UnknownCommand(string name, TextWriter stderr)
+    {
+        stderr.WriteLine($"error: unknown command '{name}'");
+        stderr.WriteLine(Usage);
+        return 2;
+    }
+}
+
+public sealed class UsageException(string message) : Exception(message);
+
+public sealed class CommandLine
+{
+    private readonly Dictionary<string, List<string>> _options = new(StringComparer.Ordinal);
+
+    public List<string> Positional { get; } = new();
+
+    public static CommandLine Parse(IEnumerable<string> args)
+    {
+        var result = new CommandLine();
+        using var e = args.GetEnumerator();
+        while (e.MoveNext())
+        {
+            var a = e.Current;
+            if (!a.StartsWith("--", StringComparison.Ordinal))
+            {
+                result.Positional.Add(a);
+                continue;
+            }
+
+            var eq = a.IndexOf('=');
+            string name;
+            string value;
+            if (eq > 0)
+            {
+                name = a[2..eq];
+                value = a[(eq + 1)..];
+            }
+            else
+            {
+                name = a[2..];
+                if (!e.MoveNext())
+                {
+                    throw new UsageException($"option --{name} needs a value");
+                }
+
+                value = e.Current;
+            }
+
+            if (!result._options.TryGetValue(name, out var list))
+            {
+                result._options[name] = list = new List<string>();
+            }
+
+            list.Add(value);
+        }
+
+        return result;
+    }
+
+    public IReadOnlyList<string> All(string name) => _options.TryGetValue(name, out var v) ? v : Array.Empty<string>();
+
+    public string? Single(string name)
+    {
+        var all = All(name);
+        if (all.Count > 1)
+        {
+            throw new UsageException($"option --{name} given more than once");
+        }
+
+        return all.Count == 1 ? all[0] : null;
+    }
+
+    public string Required(string name) => Single(name) ?? throw new UsageException($"missing required option --{name}");
+
+    public void RejectUnknown(params string[] known)
+    {
+        var unknown = _options.Keys.Where(k => !known.Contains(k, StringComparer.Ordinal)).OrderBy(k => k, StringComparer.Ordinal).ToList();
+        if (unknown.Count > 0)
+        {
+            throw new UsageException($"unknown option --{unknown[0]}");
+        }
+    }
+}

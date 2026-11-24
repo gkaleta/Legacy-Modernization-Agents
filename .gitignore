@@ -95,6 +95,8 @@ source/*
 *.cob
 *.COB
 *.cobol
+# The Starforge library folder ends in ".Cobol", which *.cobol matches on case-insensitive file systems.
+!Parser/Starforge.Cobol/
 *.jcl
 *.JCL
 *.prc
