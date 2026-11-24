@@ -101,6 +101,46 @@ public sealed class CliTests
     }
 
     [Fact]
+    public void DiffRektProcedureComparesParagraphsAndEdgesWithLines()
+    {
+        using var estate = new TestEstate();
+        estate.Write("MAIN.cbl",
+            A("IDENTIFICATION DIVISION."),
+            A("PROGRAM-ID. MAIN."),
+            A("PROCEDURE DIVISION."),
+            A("MAIN-PARA."),
+            B("PERFORM SUB-PARA."),
+            B("CALL 'PGM1'."),
+            B("GO TO END-PARA."),
+            A("SUB-PARA."),
+            B("DISPLAY 'X'."),
+            A("END-PARA."),
+            B("GOBACK."));
+        var rekt = Path.Combine(estate.Root, "rekt");
+        var flow = Path.Combine(rekt, Path.GetFileName(estate.Root), "MAIN.cbl.report", "flow_ast");
+        Directory.CreateDirectory(flow);
+        File.WriteAllText(Path.Combine(flow, "flow-ast-MAIN.cbl.json"), """
+            {"type":"PROCEDURE_DIVISION_BODY","name":"body","originalText":"MAIN-PARA.","children":[
+              {"type":"PARAGRAPHS","name":"g","originalText":"","children":[
+                {"type":"PARAGRAPH","name":"MAIN-PARA","originalText":"MAIN-PARA.\n    PERFORM SUB-PARA.\n    CALL 'PGM2'.\n    GO TO END-PARA.","children":[
+                  {"type":"PERFORM","name":"p","originalText":"PERFORM SUB-PARA","children":[]},
+                  {"type":"CALL","name":"c","originalText":"CALL 'PGM2'","children":[]},
+                  {"type":"GOTO","name":"g","originalText":"GO TO END-PARA","children":[]}]},
+                {"type":"PARAGRAPH","name":"SUB-PARA","originalText":"SUB-PARA.\n    DISPLAY 'X'.","children":[]},
+                {"type":"PARAGRAPH","name":"END-PARA","originalText":"END-PARA.\n    GOBACK.","children":[]}]}]}
+            """);
+        var outDir = Path.Combine(estate.Root, "out");
+
+        var (exit, stdout, stderr) = Run("diff-rekt", "--procedure", "--rekt", rekt, "--source", estate.Root, "--out", outDir);
+
+        exit.Should().Be(0, stderr);
+        stdout.Should().StartWith("programs=1 noBaseline=0 exceptions=0 sections=0/0:0~0 paragraphs=3/3:3~0 perform=1/1:1~0 call=0/1:1~0 goto=1/1:1~0\n");
+        var md = File.ReadAllText(Path.Combine(outDir, "procedure-diff.md"));
+        md.Should().Contain("| call | only Starforge | `MAIN-PARA -> 'PGM1'` | 6 | |");
+        md.Should().Contain("| call | only REKT | `MAIN-PARA -> 'PGM2'` | | (statement text not aligned) |");
+    }
+
+    [Fact]
     public void UnknownOptionIsAUsageError()
     {
         var (exit, _, stderr) = Run("coverage", "--source", "x", "--out", "y", "--bogus");

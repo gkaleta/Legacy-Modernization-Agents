@@ -119,6 +119,31 @@ public sealed class TokenStream : IReadOnlyList<Token>
 
     public TextOrigin Origin(int index) => Origin(_tokens[index]);
 
+    // The line in the main program file: a token expanded from a copybook maps to its outermost COPY statement.
+    public int ProgramLine(int index, bool end = false)
+    {
+        if (_tokens.Length == 0)
+        {
+            return 0;
+        }
+
+        var origin = Origin(Math.Clamp(index, 0, _tokens.Length - 1));
+        if (origin.Unit == 0)
+        {
+            return end ? origin.Range.EndLine : origin.Range.StartLine;
+        }
+
+        var units = Source.Units;
+        var unit = units[origin.Unit];
+        while (unit.ParentId > 0)
+        {
+            unit = units[unit.ParentId];
+        }
+
+        var at = unit.IncludedAt;
+        return at is null ? 0 : end ? at.Value.EndLine : at.Value.StartLine;
+    }
+
     public IEnumerator<Token> GetEnumerator() => ((IEnumerable<Token>)_tokens).GetEnumerator();
 
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _tokens.GetEnumerator();

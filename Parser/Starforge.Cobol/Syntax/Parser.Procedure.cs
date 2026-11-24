@@ -2015,27 +2015,5 @@ internal sealed partial class Parser
     }
 
     // Lines of the program file; tokens from a copybook map to the line(s) of the COPY statement that brought them in.
-    private int ProgramLine(int tokenIndex, bool end)
-    {
-        if (_ts.Count == 0)
-        {
-            return 0;
-        }
-
-        var origin = _ts.Origin(Math.Clamp(tokenIndex, 0, _ts.Count - 1));
-        if (origin.Unit == 0)
-        {
-            return end ? origin.Range.EndLine : origin.Range.StartLine;
-        }
-
-        var units = _ts.Source.Units;
-        var unit = units[origin.Unit];
-        while (unit.ParentId > 0)
-        {
-            unit = units[unit.ParentId];
-        }
-
-        var at = unit.IncludedAt;
-        return at is null ? 0 : end ? at.Value.EndLine : at.Value.StartLine;
-    }
+    private int ProgramLine(int tokenIndex, bool end) => _ts.ProgramLine(tokenIndex, end);
 }

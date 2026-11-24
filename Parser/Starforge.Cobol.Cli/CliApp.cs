@@ -7,6 +7,7 @@ public static class CliApp
           starforge coverage --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rekt-baseline <dir>]
           starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>]
           starforge diff-rekt --layouts --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
+          starforge diff-rekt --procedure --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt exec --source <estate-dir> [--source <estate-dir>...] --rekt-baseline <dir> --out <dir>
         """;
 
@@ -23,6 +24,11 @@ public static class CliApp
             if (args[0] == "diff-rekt" && args.Skip(1).Contains("--layouts", StringComparer.Ordinal))
             {
                 return LayoutDiffCommand.Run(CommandLine.Parse(args.Skip(1).Where(a => a != "--layouts")), stdout, stderr);
+            }
+
+            if (args[0] == "diff-rekt" && args.Skip(1).Contains("--procedure", StringComparer.Ordinal))
+            {
+                return ProcedureDiffCommand.Run(CommandLine.Parse(args.Skip(1).Where(a => a != "--procedure")), stdout, stderr);
             }
 
             var parsed = CommandLine.Parse(args.Skip(1));
@@ -45,7 +51,7 @@ public static class CliApp
 
     private static int NotYet(TextWriter stderr)
     {
-        stderr.WriteLine("diff-rekt is not implemented until M5 (only diff-rekt --layouts is available)");
+        stderr.WriteLine("diff-rekt is not implemented until M5 (only diff-rekt --layouts, --procedure and exec are available)");
         return 2;
     }
 
