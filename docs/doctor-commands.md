@@ -136,11 +136,13 @@ cat output/rekt/missing-copybooks.txt # add these to source/ and run rekt-full a
 
 Any other value stops the command with exit code 1. With `starforge`, each `*-deps.json` names `"dependencyProducer": "starforge"` and holds Starforge's own syntax nodes. Each node gives the file, line and column range it was parsed from and the SHA-256 of that text. The dependency evidence gate checks these against the source, using the same rules it applies to REKT output: source hashes, COPY and CALL resolution, presence and absence evidence, file bindings and runtime contracts. Strict and `draft` conversion therefore work with `starforge` for every program whose dependencies Starforge can prove:
 
-- COPY, static CALL and CALL targets documented in the target-port profile
+- COPY (including `COPY ... REPLACING`), static CALL and CALL targets documented in the target-port profile, also when the CALL names a data item that holds a single unchanged literal
 - batch file I/O (OPEN, READ, WRITE, REWRITE, DELETE, START, CLOSE) bound to its SELECT and FD
-- `EXEC CICS RETURN` without options
+- `EXEC SQL` statements, host variables and cursors, with tables bound to `REKT_SQL_DECLARATIONS`
+- `EXEC CICS` file, queue, time, container, LINK, XCTL, RETURN, RUN TRANSID and BMS map commands, with files, programs and transactions bound to `REKT_CICS_RESOURCE_DEFINITIONS` and map layouts to the BMS mapsets
+- program names that reach an XCTL or LINK through data items or the COMMAREA, proved from the assignments that can reach the command or from the estate's COMMAREA closure, which `rekt-parse` computes in a second pass
 
-Starforge does not yet export the other `EXEC CICS` commands, `EXEC SQL` or dynamic CALL. A program that uses them gets a `starforge-unsupported:*` or `dynamic-call-unsupported:*` diagnostic and stays blocked. In the sample estates, 20 of 73 programs are eligible with `starforge`; with `rekt`, all 73 are. Use `rekt` or `both` to convert CICS and SQL programs. The comparison in `both` is informational; a failed comparison does not fail the parse.
+Starforge reads the same inputs as REKT: `REKT_DEPENDENCY_PROFILE`, `REKT_CICS_RESOURCE_DEFINITIONS`, `REKT_SQL_DECLARATIONS` and `REKT_PLATFORM_CONTRACTS`. A construct it cannot prove gets a `starforge-unsupported:*`, `dynamic-call-unsupported:*` or `cics-commarea-closure-pending:*` diagnostic, and the program stays blocked; Starforge never guesses a target. In the sample estates all 73 programs are eligible with `starforge`, as with `rekt`. The comparison in `both` is informational; a failed comparison does not fail the parse.
 
 ```bash
 PARSER_ENGINE=starforge ./doctor.sh rekt-parse   # parse without Docker
