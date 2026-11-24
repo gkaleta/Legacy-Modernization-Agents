@@ -221,7 +221,7 @@ public static class DependencyExtractor
     }
 
     // Generated platform copybooks (DFHAID, DFHBMSCA) carry a sidecar naming a platform contract as their producer.
-    private static bool IsPlatformProjection(string path)
+    internal static bool IsPlatformProjection(string path)
     {
         var sidecar = path + ".preprocess.json";
         if (!File.Exists(sidecar))
@@ -367,7 +367,7 @@ internal sealed class ConstantResolver
     }
 
     // Storage is identified by the record it lives in (following record-level REDEFINES) and its byte range.
-    private static (DataItem Root, int Start, int End) Extent(DataItem item)
+    internal static (DataItem Root, int Start, int End) Extent(DataItem item)
     {
         var root = item.Record;
         while (root.Redefines is { } redefined && !ReferenceEquals(redefined, root))

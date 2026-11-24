@@ -40,14 +40,16 @@ internal sealed partial class NativeCics
     private readonly NativeData _data;
     private readonly CicsCatalog _catalog;
     private readonly VsamCatalog _vsam;
+    private readonly BmsLayouts _layouts;
     private readonly Func<string, string?> _programSource;
 
     // programSource finds a program's source in the dependency search view.
-    public NativeCics(NativeData data, CicsCatalog catalog, VsamCatalog vsam, Func<string, string?> programSource)
+    public NativeCics(NativeData data, CicsCatalog catalog, VsamCatalog vsam, BmsLayouts layouts, Func<string, string?> programSource)
     {
         _data = data;
         _catalog = catalog;
         _vsam = vsam;
+        _layouts = layouts;
         _programSource = programSource;
     }
 
@@ -87,7 +89,7 @@ internal sealed partial class NativeCics
                 throw new Problem("tokens");
             }
 
-            return Build(block, tokens[blockToken].Start, x, verb, unit, links);
+            return Build(exec, block, tokens[blockToken].Start, x, verb, unit, links);
         }
         catch (Problem problem)
         {
@@ -96,7 +98,7 @@ internal sealed partial class NativeCics
         }
     }
 
-    private List<JsonObject> Build(string block, int blockStart, List<XToken> x, string verb, ProgramUnit unit, List<string> links)
+    private List<JsonObject> Build(ExecStatementSyntax exec, string block, int blockStart, List<XToken> x, string verb, ProgramUnit unit, List<string> links)
     {
         var end = x.Count - 1;
         var options = new List<Option>();
@@ -191,7 +193,7 @@ internal sealed partial class NativeCics
         var root = NativeSyntax.Node("CicsCommand", [NativeSyntax.Token(x[2].Text), .. options.Select(o => (JsonNode)o.Node)]);
         var names = options.Select(o => o.Name).ToList();
         var form = Form(verb, names);
-        var command = new Command(verb, names, options, unit);
+        var command = new Command(verb, names, options, unit, exec);
 
         var bindings = new List<JsonNode>();
         JsonObject? linkOperand = verb == "LINK" ? options.FirstOrDefault(o => o.Name == "PROGRAM")?.Node : null;
@@ -261,7 +263,7 @@ internal sealed partial class NativeCics
         };
     }
 
-    private sealed record Command(string Verb, List<string> Names, List<Option> Options, ProgramUnit Unit)
+    private sealed record Command(string Verb, List<string> Names, List<Option> Options, ProgramUnit Unit, ExecStatementSyntax Exec)
     {
         public string? Link { get; set; }
 
@@ -329,7 +331,8 @@ internal sealed partial class NativeCics
         switch (form)
         {
             case "SEND MAP" or "RECEIVE MAP":
-                throw new Problem("map");
+                yield return Map(command, verb);
+                yield break;
             case "INQUIRE PROGRAM":
                 yield return ProgramTarget(command, "program-definition-inquiry");
                 yield break;
@@ -445,33 +448,39 @@ internal sealed partial class NativeCics
             throw new Problem("operand:" + option.Name);
         }
 
-        var (constant, item) = _data.Constant(command.Unit, argument.Text, callTargets: true, NameOptions, readStatements: true)
-            ?? throw new Problem("not-constant:" + argument.Text);
+        return Constant(command.Unit, argument.Text, minimum, maximum);
+    }
+
+    // A data name whose only value is its read-only VALUE literal, with the proof the gate re-derives.
+    private (string Value, JsonObject Proof) Constant(ProgramUnit unit, string operand, int minimum, int maximum)
+    {
+        var (constant, item) = _data.Constant(unit, operand, callTargets: true, NameOptions, readStatements: true)
+            ?? throw new Problem("not-constant:" + operand);
         var kind = item.Section switch
         {
             DataSectionKind.WorkingStorage => "immutable-working-storage-literal",
             DataSectionKind.LocalStorage => "immutable-local-storage-literal",
-            _ => throw new Problem("constant-section:" + argument.Text),
+            _ => throw new Problem("constant-section:" + operand),
         };
-        var definition = _data.Entry(item) ?? throw new Problem("constant:" + argument.Text);
+        var definition = _data.Entry(item) ?? throw new Problem("constant:" + operand);
         var ancestors = item.Ancestors().Reverse().Select(_data.Entry).ToList();
         var text = string.Concat(Words(definition));
         var declaration = Regex.Match(
             text,
-            "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(argument.Text) + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]?)\)VALUE(?:IS)?(['"])([A-Za-z0-9@$#_-]+)( *)\3\.$""",
+            "^(0?[1-9]|[1-4][0-9]|77)" + Regex.Escape(operand) + """PIC(?:TURE)?(?:IS)?X\(0*([1-9][0-9]?)\)VALUE(?:IS)?(['"])([A-Za-z0-9@$#_-]+)( *)\3\.$""",
             RegexOptions.IgnoreCase);
         if (!declaration.Success || declaration.Groups[4].Value != constant.TrimEnd(' ')
             || declaration.Groups[4].Length < minimum || declaration.Groups[4].Length > maximum
             || declaration.Groups[4].Length + declaration.Groups[5].Length > int.Parse(declaration.Groups[2].Value)
             || ancestors.Any(a => a is null || !Regex.IsMatch(string.Concat(Words(a)), @"^(0?[1-9]|[1-4][0-9])[A-Za-z][A-Za-z0-9-]*\.$")))
         {
-            throw new Problem("constant-shape:" + argument.Text);
+            throw new Problem("constant-shape:" + operand);
         }
 
         return (constant.TrimEnd(' '), new JsonObject
         {
             ["kind"] = kind,
-            ["operand"] = argument.Text,
+            ["operand"] = operand,
             ["definitionSyntax"] = definition,
             ["ancestorSyntax"] = new JsonArray(ancestors.Select(a => (JsonNode)a!).ToArray()),
             ["usageProof"] = "single-native-program:read-only-constant-references",

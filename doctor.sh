@@ -3435,6 +3435,7 @@ starforge_export_dependencies() {
     [[ -z "$cics_definitions" ]] || profile_args+=(--cics-definitions "$cics_definitions")
     [[ -z "$vsam_definitions" ]] || profile_args+=(--vsam-definitions "$vsam_definitions")
     [[ -z "${REKT_SQL_DECLARATIONS:-}" ]] || profile_args+=(--sql-declarations "$(starforge_host_paths "$REKT_SQL_DECLARATIONS")")
+    [[ -z "${REKT_PLATFORM_CONTRACTS:-}" ]] || profile_args+=(--platform-contracts "$(rekt_platform_contracts_for "$estate" host)")
     if lma_cli rekt-evidence dependency-search-view \
         --staging-root "$estate_staging" --relative-path "$rel_program" 2>>"$err_log"; then
         [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies (Starforge): $rel_program"

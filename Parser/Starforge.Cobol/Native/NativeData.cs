@@ -142,6 +142,35 @@ internal sealed class NativeData
         return resolver.ValueOf(item) is { } value ? (value, item) : null;
     }
 
+    public ProcedureBindings BindingsOf(ProgramUnit unit)
+    {
+        var index = _result.Syntax.AllPrograms().ToList().FindIndex(u => ReferenceEquals(u, unit));
+        return index >= 0 && index < _result.Bindings.Count ? _result.Bindings[index] : ProcedureBindings.Empty;
+    }
+
+    // A procedure statement as a rooted tree of its own tokens; a separator period ending the sentence is not part of it.
+    public JsonObject Statement(Statement statement, string kind)
+    {
+        var tokens = _roots.Tokens;
+        var end = statement.Span.EndToken;
+        while (end > statement.Span.FirstToken + 1 && tokens[end - 1].Kind == TokenKind.Period)
+        {
+            end--;
+        }
+
+        return _roots.RootTokens(NativeSyntax.Node(kind, Range(statement.Span.FirstToken, end)), statement.Span.FirstToken, end, "statement:" + kind);
+    }
+
+    // Storage two data items may share: the same record (through record REDEFINES) and overlapping bytes, an
+    // OCCURS item counting as its whole table.
+    public static bool Overlap(DataItem a, DataItem b)
+    {
+        static (DataItem Root, int Start, int End) Of(DataItem item) =>
+            ConstantResolver.Extent(item.Ancestors().Prepend(item).LastOrDefault(x => x.Occurs is not null) ?? item);
+        var (x, y) = (Of(a), Of(b));
+        return ReferenceEquals(x.Root, y.Root) && x.Start < y.End && y.Start < x.End;
+    }
+
     // Every EXEC block inside the unit (its data division included).
     public IEnumerable<Exec.ExecStatement> Execs(ProgramUnit unit) => ExecBlocks(unit).Select(b => b.Statement);
 

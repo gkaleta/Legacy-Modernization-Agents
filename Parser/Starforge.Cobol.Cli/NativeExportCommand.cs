@@ -10,7 +10,7 @@ internal static class NativeExportCommand
 
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
-        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "out");
+        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "platform-contracts", "out");
         if (cmd.Positional.Count > 0)
         {
             throw new UsageException($"unexpected argument '{cmd.Positional[0]}'");
@@ -48,7 +48,15 @@ internal static class NativeExportCommand
             return 2;
         }
 
-        var document = NativeExporter.Export(new NativeExportOptions(program, copybooks, profile is { Length: > 0 } ? profile : null, cics, vsam, sql));
+        var platform = cmd.Single("platform-contracts");
+        if (platform is { Length: > 0 } && !File.Exists(platform))
+        {
+            stderr.WriteLine($"error: platform replacement profile not found: {platform}");
+            return 2;
+        }
+
+        var document = NativeExporter.Export(new NativeExportOptions(
+            program, copybooks, profile is { Length: > 0 } ? profile : null, cics, vsam, sql, platform is { Length: > 0 } ? platform : null));
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         File.WriteAllText(output, document.ToJsonString(Indented) + "\n");
         var diagnostics = document["dependencyDiagnostics"]!.AsArray();

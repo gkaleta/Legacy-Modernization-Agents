@@ -22,8 +22,13 @@ public static partial class RektEvidence
         foreach (var (key, value) in program)
             if (key != "dependencies") CheckRoots(key, value, files, root, texts, errors);
         foreach (var child in Items(program, "dependencies"))
-            if (Str(child, "dependencyKind") != "COPY" && Items(child, "dependencyDialectStatements").Any())
+        {
+            // A platform copy's usages are the program's own statements, so they root in the program's inputs.
+            if (Str(child, "dependencyKind") == "PLATFORM_COPY")
+                CheckRoots("runtimeContract", Get(child, "runtimeContract"), files, root, texts, errors);
+            else if (Str(child, "dependencyKind") != "COPY" && Items(child, "dependencyDialectStatements").Any())
                 StarforgeSyntaxRoots(child, root, errors);
+        }
     }
 
     private static void CheckRoots(string key, JsonNode? value, HashSet<string> files, string root,

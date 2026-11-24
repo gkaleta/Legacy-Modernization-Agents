@@ -8,7 +8,8 @@ public static class CliApp
           starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>]
           starforge emit --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge native-export --program <file> --copybooks <dir> [--profile <file.json>] [--cics-definitions <csd|yaml>...]
-            [--vsam-definitions <idcams-jcl>...] [--sql-declarations <member>...] --out <file-deps.json>
+            [--vsam-definitions <idcams-jcl>...] [--sql-declarations <member>...] [--platform-contracts <file.json>]
+            --out <file-deps.json>
           starforge diff-rekt --layouts --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt --procedure --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt exec --source <estate-dir> [--source <estate-dir>...] --rekt-baseline <dir> --out <dir>

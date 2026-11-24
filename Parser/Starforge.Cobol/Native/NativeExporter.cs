@@ -11,14 +11,16 @@ namespace Starforge.Cobol.Native;
 // profile whose runtimeContracts document CALL targets that have no COBOL source. CicsDefinitions are the
 // region's resource definitions (DFHCSDUP extracts or resourceDefinitions YAML) and VsamDefinitions the JCL whose
 // IDCAMS steps define the clusters behind CICS files. SqlDeclarations are members holding DECLARE TABLE
-// statements the programs use without INCLUDE-ing them.
+// statements the programs use without INCLUDE-ing them. PlatformContracts is the platform replacement profile the
+// staged DFHAID/DFHBMSCA projections were generated from; without it the projection's own sidecar names it.
 public sealed record NativeExportOptions(
     string ProgramPath,
     string CopybookRoot,
     string? ProfilePath = null,
     IReadOnlyList<string>? CicsDefinitions = null,
     IReadOnlyList<string>? VsamDefinitions = null,
-    IReadOnlyList<string>? SqlDeclarations = null);
+    IReadOnlyList<string>? SqlDeclarations = null,
+    string? PlatformContracts = null);
 
 // Writes the native dependency contract the dependency evidence gate verifies, from Starforge's own parse.
 // Statement and definition trees are Starforge nodes with source ranges; a construct this exporter cannot
@@ -44,7 +46,9 @@ public static class NativeExporter
         var catalog = CicsCatalog.Load(options.CicsDefinitions ?? []);
         var vsam = VsamCatalog.Load(options.VsamDefinitions ?? []);
         var sql = SqlCatalog.Load(frontEnd, options.SqlDeclarations ?? []);
-        var exporter = new Run(frontEnd, profile, Path.GetDirectoryName(program)!, catalog, vsam, sql);
+        var layouts = BmsLayouts.Load(options.CopybookRoot);
+        var platform = options.PlatformContracts is { Length: > 0 } contracts ? Path.GetFullPath(contracts) : null;
+        var exporter = new Run(frontEnd, profile, Path.GetDirectoryName(program)!, catalog, vsam, sql, layouts, platform);
         return exporter.Program(program, Path.GetFileName(program), "PROGRAM", new HashSet<string>(StringComparer.Ordinal));
     }
 
@@ -66,7 +70,8 @@ public static class NativeExporter
         }
     }
 
-    private sealed class Run(CobolFrontEnd frontEnd, Profile? profile, string searchView, CicsCatalog catalog, VsamCatalog vsam, SqlCatalog sqlCatalog)
+    private sealed class Run(
+        CobolFrontEnd frontEnd, Profile? profile, string searchView, CicsCatalog catalog, VsamCatalog vsam, SqlCatalog sqlCatalog, BmsLayouts layouts, string? platformContracts)
     {
         private string? Source(string name) =>
             Directory.EnumerateFiles(searchView)
@@ -81,14 +86,14 @@ public static class NativeExporter
             var result = frontEnd.Process(path);
             var roots = new SyntaxRoots(result);
             var data = new NativeData(result, roots);
-            var cics = new NativeCics(data, catalog, vsam, n => Source(n) is { } found ? Path.GetFullPath(found) : null);
+            var cics = new NativeCics(data, catalog, vsam, layouts, n => Source(n) is { } found ? Path.GetFullPath(found) : null);
             var sql = new NativeSql(data, sqlCatalog, profile?.Sql);
             var diagnostics = new List<string>();
             var statements = new JsonArray();
             var children = new List<JsonObject>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var copy in Copies(result, diagnostics))
+            foreach (var copy in Copies(result, roots, data, diagnostics))
             {
                 if (seen.Add("COPY:" + copy["callTarget"]!["name"]))
                 {
@@ -165,7 +170,7 @@ public static class NativeExporter
             return Document(path, name, kind, children, statements, diagnostics.Distinct(StringComparer.Ordinal).ToList(), fileIo);
         }
 
-        private static JsonObject Document(string path, string name, string kind, List<JsonObject> children, JsonArray statements, List<string> diagnostics, bool fileIo)
+        private JsonObject Document(string path, string name, string kind, List<JsonObject> children, JsonArray statements, List<string> diagnostics, bool fileIo)
         {
             var list = statements.OfType<JsonObject>().ToList();
             var presence = new JsonObject();
@@ -242,7 +247,7 @@ public static class NativeExporter
                     ["carriers"] = new JsonArray(),
                     ["sends"] = new JsonArray(),
                 },
-                ["dependencyDerivedInputs"] = new JsonArray(),
+                ["dependencyDerivedInputs"] = DerivedInputs(children),
                 ["dependencyPresenceEvidence"] = presence,
                 ["dependencyAbsenceEvidence"] = absence,
                 ["sourcePath"] = path,
@@ -252,6 +257,21 @@ public static class NativeExporter
                 ["runtimeContractBindingComplete"] = false,
             };
             return document;
+        }
+
+        // Each COPY of a generated symbolic-map copybook brings the BMS layout staged beside it.
+        private JsonArray DerivedInputs(List<JsonObject> children)
+        {
+            var inputs = new JsonArray();
+            foreach (var child in children.Where(c => (string?)c["dependencyKind"] == "COPY"))
+            {
+                if (layouts.ForCopybook((string)child["sourcePath"]!) is { } layout)
+                {
+                    inputs.Add(BmsLayouts.DerivedInput(layout, (string)child["callTarget"]!["name"]!));
+                }
+            }
+
+            return inputs;
         }
 
         private static bool BareReturn(JsonObject statement) =>
@@ -289,7 +309,7 @@ public static class NativeExporter
             ["runtimeContractBindingComplete"] = false,
         };
 
-        private static IEnumerable<JsonObject> Copies(CompilationResult result, List<string> diagnostics)
+        private IEnumerable<JsonObject> Copies(CompilationResult result, SyntaxRoots roots, NativeData data, List<string> diagnostics)
         {
             foreach (var inclusion in result.Inclusions)
             {
@@ -307,6 +327,12 @@ public static class NativeExporter
                     continue;
                 }
 
+                if (Deps.DependencyExtractor.IsPlatformProjection(path))
+                {
+                    yield return PlatformCopy(result, roots, data, path, diagnostics);
+                    continue;
+                }
+
                 var leaf = Leaf(Path.GetFileNameWithoutExtension(path) + ".cpy", "COPY");
                 leaf.Remove("dependencyKind");
                 leaf.Remove("dependencyAnalysisComplete");
@@ -318,6 +344,32 @@ public static class NativeExporter
                 leaf["runtimeContractBindingComplete"] = false;
                 yield return leaf;
             }
+        }
+
+        // A platform copy has no body of its own: its meaning is the runtime contract binding each use of its symbols.
+        private JsonObject PlatformCopy(CompilationResult result, SyntaxRoots roots, NativeData data, string path, List<string> diagnostics)
+        {
+            var name = Path.GetFileNameWithoutExtension(path).ToUpperInvariant();
+            var leaf = Leaf(name, "PLATFORM_COPY");
+            var contract = Emit.PlatformContract.BindNative(
+                result, roots, data.Entry, name, path, platformContracts ?? ContractsOf(path), out var failure);
+            if (contract is null)
+            {
+                diagnostics.Add($"starforge-unsupported:platform-copy:{name}:{failure}");
+                return leaf;
+            }
+
+            leaf["runtimeContractBindingComplete"] = true;
+            leaf["runtimeContract"] = contract;
+            return leaf;
+        }
+
+        private static string? ContractsOf(string projection)
+        {
+            var sidecar = projection + ".preprocess.json";
+            return File.Exists(sidecar) && JsonNode.Parse(File.ReadAllText(sidecar)) is JsonObject record
+                ? (string?)record["originalSourcePath"]
+                : null;
         }
 
         private JsonObject? Call(CallStatement call, HashSet<string> active, List<string> diagnostics)

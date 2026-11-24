@@ -39,9 +39,16 @@ internal sealed class PlatformContract
     private readonly Dictionary<string, JsonElement?> _layouts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> _projections = new(StringComparer.Ordinal);
 
-    private PlatformContract(CompilationResult result)
+    // Set for the native dependency contract: usages become Starforge nodes rooted in their source range and data
+    // declarations come from the native exporter, instead of the cobol-rekt shaped trees of the emitted tree.
+    private readonly Native.SyntaxRoots? _roots;
+    private readonly Func<DataItem, JsonObject?>? _entry;
+
+    private PlatformContract(CompilationResult result, Native.SyntaxRoots? roots = null, Func<DataItem, JsonObject?>? entry = null)
     {
         _result = result;
+        _roots = roots;
+        _entry = entry;
         _tokens = result.Tokens;
         var content = result.Expanded.Content;
         var starts = new List<int> { 0 };
@@ -58,6 +65,13 @@ internal sealed class PlatformContract
 
     // Returns the runtimeContract object, or null with the reason no complete binding exists.
     public static JsonObject? Bind(CompilationResult result, string name, string projectionPath, string? contractsPath, out string? failure)
+        => Bind(new PlatformContract(result), name, projectionPath, contractsPath, out failure);
+
+    public static JsonObject? BindNative(
+        CompilationResult result, Native.SyntaxRoots roots, Func<DataItem, JsonObject?> entry, string name, string projectionPath, string? contractsPath, out string? failure)
+        => Bind(new PlatformContract(result, roots, entry), name, projectionPath, contractsPath, out failure);
+
+    private static JsonObject? Bind(PlatformContract binder, string name, string projectionPath, string? contractsPath, out string? failure)
     {
         failure = null;
         if (contractsPath is null || !File.Exists(contractsPath))
@@ -74,7 +88,6 @@ internal sealed class PlatformContract
             return null;
         }
 
-        var binder = new PlatformContract(result);
         var usages = name.Equals("DFHAID", StringComparison.OrdinalIgnoreCase) ? binder.TerminalUsages(out failure) : binder.BmsUsages(out failure);
         if (usages is null)
         {
@@ -131,7 +144,10 @@ internal sealed class PlatformContract
                 if (statement is EvaluateStatement { Subjects: [{ Kind: EvaluateOperandKind.Expression, Value: DataRef subject }] } evaluate
                     && IsWord(subject.Span, "EIBAID"))
                 {
-                    usages.Add((subject.Span.FirstToken, Usage("EvaluateSelectContext", subject.Span, Rule("EvaluateSelectContext", Word(Text(subject.Span.FirstToken))), "evaluate-subject")));
+                    var subjectSyntax = _roots is not null
+                        ? Node("EvaluateSubject", Token(Text(subject.Span.FirstToken)))
+                        : Rule("EvaluateSelectContext", Word(Text(subject.Span.FirstToken)));
+                    usages.Add((subject.Span.FirstToken, Usage("EvaluateSelectContext", subject.Span, subjectSyntax, "evaluate-subject")));
                     covered.Add(subject.Span.FirstToken);
                     foreach (var alternative in evaluate.Whens.SelectMany(w => w.Alternatives))
                     {
@@ -144,8 +160,10 @@ internal sealed class PlatformContract
                         }
 
                         var span = new NodeSpan(value.Span.FirstToken - 1, value.Span.EndToken, _tokens[value.Span.FirstToken - 1].Start, value.Span.End);
-                        var syntax = Rule("EvaluateWhenContext", Token(Text(span.FirstToken)),
-                            Rule("EvaluateConditionContext", Rule("EvaluateValueContext", Word(Text(value.Span.FirstToken)))));
+                        var syntax = _roots is not null
+                            ? Node("EvaluateWhen", Token(Text(span.FirstToken)), Token(Text(value.Span.FirstToken)))
+                            : Rule("EvaluateWhenContext", Token(Text(span.FirstToken)),
+                                Rule("EvaluateConditionContext", Rule("EvaluateValueContext", Word(Text(value.Span.FirstToken)))));
                         usages.Add((span.FirstToken, Usage("EvaluateWhenContext", span, syntax, "evaluate-when")));
                         covered.Add(value.Span.FirstToken);
                     }
@@ -271,17 +289,19 @@ internal sealed class PlatformContract
             }
             else if (TerminalEvents.Contains(Text(indices[position])))
             {
-                simple = Rule("SimpleConditionContext", Word(Text(indices[position++])));
+                simple = _roots is not null
+                    ? Node("RelationCondition", Token(Text(indices[position++])))
+                    : Rule("SimpleConditionContext", Word(Text(indices[position++])));
             }
             else
             {
                 return null;
             }
 
-            children.Add(Rule("AdditionalConditionContext", Token(conjunction), simple));
+            children.Add(_roots is not null ? Node("CombinedCondition", Token(conjunction), simple) : Rule("AdditionalConditionContext", Token(conjunction), simple));
         }
 
-        return Rule("ConditionContext", children.ToArray());
+        return _roots is not null ? Node("Condition", children.ToArray()) : Rule("ConditionContext", children.ToArray());
     }
 
     private JsonObject? Relation(List<int> indices, int start, out int next)
@@ -323,10 +343,15 @@ internal sealed class PlatformContract
             return null;
         }
 
+        next = position + 1;
+        if (_roots is not null)
+        {
+            return Node("RelationCondition", indices[start..next].Select(i => (JsonNode)Token(Text(i))).ToArray());
+        }
+
         op.Add(Rule("CharBasedOperatorContext", basis.ToArray()));
         var simple = Rule("SimpleConditionContext", Word(Text(indices[start])),
             Rule("RelationCombinedComparisonContext", Rule("RelationalOperatorContext", op.ToArray()), Word(Text(indices[position]))));
-        next = position + 1;
         return simple;
     }
 
@@ -347,7 +372,16 @@ internal sealed class PlatformContract
                     continue;
                 }
 
-                var usage = BmsUsage(move, targets, bindings, out failure);
+                JsonObject? usage;
+                try
+                {
+                    usage = BmsUsage(move, targets, bindings, out failure);
+                }
+                catch (NativeEntryException error)
+                {
+                    (usage, failure) = (null, error.Message);
+                }
+
                 if (usage is null)
                 {
                     failure = $"{failure} (line {Line(move.Span.FirstToken)})";
@@ -568,9 +602,12 @@ internal sealed class PlatformContract
             LiteralExpr => Rule("LiteralContext", Token(value)),
             _ => Rule("LiteralContext", Rule("FigurativeConstantContext", Token(value))),
         };
-        var syntax = Rule("MoveStatementContext", Token(Text(move.Span.FirstToken)),
-            Rule("MoveToStatementContext", [Rule("MoveToSendingAreaContext", sending), Token(Text(move.Source.Span.EndToken)), .. targetSyntax]));
         var span = Trimmed(move.Span);
+        var syntax = _roots is not null
+            ? Node("MoveStatement", Enumerable.Range(span.FirstToken, span.TokenCount)
+                .Where(i => _tokens[i].Kind is not (TokenKind.Comma or TokenKind.Semicolon)).Select(i => (JsonNode)Token(Text(i))).ToArray())
+            : Rule("MoveStatementContext", Token(Text(move.Span.FirstToken)),
+                Rule("MoveToStatementContext", [Rule("MoveToSendingAreaContext", sending), Token(Text(move.Source.Span.EndToken)), .. targetSyntax]));
         var usage = Usage("MoveStatementContext", span, syntax, null);
         if (overlays.Count > 0)
         {
@@ -723,6 +760,11 @@ internal sealed class PlatformContract
     // The entry's own description up to its period, shaped like the data-description grammar rules.
     private JsonObject EntrySyntax(DataItem item)
     {
+        if (_entry is not null)
+        {
+            return _entry(item) ?? throw new NativeEntryException(item.Name ?? "FILLER");
+        }
+
         var span = item.Entry.Span;
         var children = new List<JsonNode> { Rule("LevelNumberContext", Token(Text(span.FirstToken))) };
         var i = span.FirstToken + 1;
@@ -810,6 +852,12 @@ internal sealed class PlatformContract
             text = text.Replace("\n", "\n       ", StringComparison.Ordinal);
         }
 
+        if (_roots is not null)
+        {
+            grammarRule = (string)syntax["node"]!;
+            syntax = _roots.RootTokens(syntax, span.FirstToken, span.EndToken, "platform-usage:" + grammarRule);
+        }
+
         var usage = new JsonObject { ["grammarRule"] = grammarRule };
         if (role is not null)
         {
@@ -837,6 +885,10 @@ internal sealed class PlatformContract
     private static JsonObject Rule(string rule, params JsonNode[] children) => new() { ["rule"] = rule, ["children"] = new JsonArray(children) };
 
     private static JsonObject Token(string text) => new() { ["token"] = text };
+
+    private static JsonObject Node(string kind, params JsonNode[] children) => Native.NativeSyntax.Node(kind, children);
+
+    private sealed class NativeEntryException(string name) : Exception("data entry has no native syntax: " + name);
 
     private static JsonObject Word(string text) =>
         Rule("ArithmeticExpressionContext", Rule("MultDivsContext", Rule("PowersContext", Rule("BasisContext", Rule("GeneralIdentifierContext",
