@@ -57,8 +57,17 @@ public sealed class TokenAccounting
     private readonly List<SourceUnit> _units = new();
     private readonly List<byte[]> _classes = new();
     private readonly List<(int Unit, int Start, int End, CoverageClass Class, string Reason, int Chars)> _marks = new();
+    private readonly Dictionary<(int Unit, CoverageClass Class, string Reason), MarkIndex> _markIndex = new();
     private readonly Dictionary<(CoverageClass, string), long> _reasonCounts = new();
     private int _conflicts;
+
+    // Marks of one (unit, class, reason) ordered by start, so Reclassify finds overlaps without scanning every mark.
+    private sealed class MarkIndex
+    {
+        public List<(int Start, int Mark)> ByStart { get; } = new();
+
+        public int MaxLength { get; set; }
+    }
 
     public int Conflicts => _conflicts;
 
@@ -110,7 +119,7 @@ public sealed class TokenAccounting
 
         var key = (cls, reason);
         _reasonCounts[key] = _reasonCounts.TryGetValue(key, out var n) ? n + count : count;
-        _marks.Add((unitId, start, end, cls, reason, count));
+        AddMark(unitId, start, end, cls, reason, count);
     }
 
     // Promotes characters already claimed as Lexed (used when a later stage consumes lexed tokens).
@@ -132,7 +141,7 @@ public sealed class TokenAccounting
         {
             var key = (to, reason);
             _reasonCounts[key] = _reasonCounts.TryGetValue(key, out var n) ? n + count : count;
-            _marks.Add((unitId, start, end, to, reason, count));
+            AddMark(unitId, start, end, to, reason, count);
         }
     }
 
@@ -151,10 +160,10 @@ public sealed class TokenAccounting
 
         var moved = new bool[end - start];
         var total = 0;
-        for (var m = 0; m < _marks.Count; m++)
+        foreach (var m in Overlapping(unitId, fromClass, fromReason, start, end))
         {
             var mark = _marks[m];
-            if (mark.Unit != unitId || mark.Class != fromClass || mark.Reason != fromReason || mark.End <= start || mark.Start >= end)
+            if (mark.Chars == 0 || mark.End <= start || mark.Start >= end)
             {
                 continue;
             }
@@ -182,15 +191,68 @@ public sealed class TokenAccounting
             _reasonCounts[key] -= taken;
         }
 
-        _marks.RemoveAll(m => m.Chars == 0);
         if (total > 0 && toClass is not (CoverageClass.Lexed or CoverageClass.Parsed))
         {
             var key = (toClass, toReason);
             _reasonCounts[key] = _reasonCounts.TryGetValue(key, out var n) ? n + total : total;
-            _marks.Add((unitId, start, end, toClass, toReason, total));
+            AddMark(unitId, start, end, toClass, toReason, total);
         }
 
         return total;
+    }
+
+    private void AddMark(int unitId, int start, int end, CoverageClass cls, string reason, int chars)
+    {
+        _marks.Add((unitId, start, end, cls, reason, chars));
+        var key = (unitId, cls, reason);
+        if (!_markIndex.TryGetValue(key, out var index))
+        {
+            _markIndex[key] = index = new MarkIndex();
+        }
+
+        var list = index.ByStart;
+        var at = list.Count;
+        while (at > 0 && list[at - 1].Start > start)
+        {
+            at--;
+        }
+
+        list.Insert(at, (start, _marks.Count - 1));
+        index.MaxLength = Math.Max(index.MaxLength, end - start);
+    }
+
+    // Candidate marks in insertion order, which is the order the claims were made.
+    private List<int> Overlapping(int unitId, CoverageClass cls, string reason, int start, int end)
+    {
+        var result = new List<int>();
+        if (!_markIndex.TryGetValue((unitId, cls, reason), out var index))
+        {
+            return result;
+        }
+
+        var list = index.ByStart;
+        int lo = 0, hi = list.Count;
+        var from = start - index.MaxLength;
+        while (lo < hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (list[mid].Start < from)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+
+        for (var i = lo; i < list.Count && list[i].Start < end; i++)
+        {
+            result.Add(list[i].Mark);
+        }
+
+        result.Sort();
+        return result;
     }
 
     // Replacement text is owned by the directive that supplied it, so only original characters are claimed here.
@@ -379,7 +441,7 @@ public sealed class TokenAccounting
             }
         }
 
-        foreach (var m in _marks)
+        foreach (var m in _marks.Where(m => m.Chars > 0))
         {
             var source = _units[m.Unit].Source;
             AddRange(m.Class, m.Reason, source.RangeOf(m.Start, TrimEnd(source.Text, m.Start, m.End)), m.Chars);
