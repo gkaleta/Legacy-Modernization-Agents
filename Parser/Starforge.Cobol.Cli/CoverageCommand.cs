@@ -195,7 +195,7 @@ internal static class CoverageCommand
         using var stream = File.Create(path);
         using var w = new Utf8JsonWriter(stream, JsonReport.WriterOptions);
         w.WriteStartObject();
-        w.WriteString("milestone", "M2");
+        w.WriteString("milestone", "M3");
         WriteTotals(w, "totals", programs);
         w.WriteStartObject("estates");
         foreach (var g in programs.GroupBy(p => p.Estate).OrderBy(g => g.Key, StringComparer.Ordinal))
@@ -324,10 +324,10 @@ internal static class CoverageCommand
     private static string SummaryMarkdown(IReadOnlyList<ProgramSummary> programs, RektComparison? rekt)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Starforge M2 coverage");
+        sb.AppendLine("# Starforge M3 coverage");
         sb.AppendLine();
         sb.AppendLine("Non-blank program-area characters (fixed format columns 8-72) of each program and every copybook instance it expands.");
-        sb.AppendLine("`Parsed` is consumed by the IDENTIFICATION/ENVIRONMENT/DATA parser; `Lexed` is still waiting for a parser (PROCEDURE DIVISION bodies for M3, EXEC blocks for the Exec stage).");
+        sb.AppendLine("`Parsed` is consumed by the division parsers (IDENTIFICATION/ENVIRONMENT/DATA/PROCEDURE) or the EXEC parsers; `Lexed` is tokenised but claimed by no parser (expected 0). Statements the parser cannot handle are error nodes and count as `Unsupported`.");
         sb.AppendLine("`ID+ENV+DATA parsed %` = Parsed / (Parsed + parser-rejected + Lexed outside PROCEDURE DIVISION bodies).");
         sb.AppendLine();
         sb.AppendLine("| Estate | Programs | Exceptions | Total chars | Parsed % | ID+ENV+DATA parsed % | Error nodes | Lexed % | Comment % | Directive % | Unsupported % | Unresolved % | Skipped % | Unaccounted | Conflicts | Unresolved copybooks |");
