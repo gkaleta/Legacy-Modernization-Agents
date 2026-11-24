@@ -56,10 +56,11 @@ internal static class Program
         }
 
         // The baseline also holds pipeline outputs (dependency-evidence.json, .commarea-closure.json, *.facts.json);
-        // comparing only parser artefacts keeps both sides on the same footing.
+        // comparing only parser artefacts keeps both sides on the same footing, except the gate evidence REKT can only show stored.
+        var rektBaseline = rekt;
         rekt = ParserMirror(rekt, Path.Combine(outDir, "rekt-parser"), programs);
         var report = new DiffReport { Programs = programs.Count };
-        var classifier = new Classifier(CsdRuns(rekt, starforge, programs));
+        var classifier = new Classifier(NativeUnclaimed(starforge, programs));
 
         var rektFacts = Path.Combine(outDir, "facts-rekt");
         var sfFacts = Path.Combine(outDir, "facts-starforge");
@@ -90,7 +91,7 @@ internal static class Program
             classifier.Begin(ProgramEvidence.Build(rel, rektContext, sfContext, Report(rekt, rel).Ast, Report(starforge, rel).Ast));
             ContextDiff.Run(cmp, rektContext, sfContext);
             ArtifactDiff.Deps(cmp, Path.Combine(rekt, rel + "-deps.json"), sfDeps, rel);
-            ArtifactDiff.Evidence(cmp, source, rel, rekt, starforge);
+            ArtifactDiff.Evidence(cmp, source, rel, rektBaseline, starforge);
             ArtifactDiff.Graph(cmp, rel, Report(rekt, rel), Report(starforge, rel));
 
             using var left = JsonDocument.Parse(File.ReadAllText(ProgramFactsArtifactLocator.GetFactsFilePath(rektFacts, rel)));
@@ -146,36 +147,23 @@ internal static class Program
         return (First(report, "flow_ast"), First(report, "cfg"));
     }
 
-    // REKT names CICS RUN targets it bound through the estate CSD; they count as such only where Starforge sees a RUN with a data-name TRANSID.
-    private static Dictionary<string, HashSet<string>> CsdRuns(string rekt, string starforge, IEnumerable<string> programs)
+    private static HashSet<string> NativeUnclaimed(string starforge, IEnumerable<string> programs)
     {
-        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var result = new HashSet<string>(StringComparer.Ordinal);
         foreach (var rel in programs)
         {
-            var sfPath = Path.Combine(starforge, rel + "-deps.json");
-            if (!File.Exists(sfPath))
+            var path = Path.Combine(starforge, rel + "-deps.json");
+            if (!File.Exists(path))
             {
                 continue;
             }
 
-            using var sf = JsonDocument.Parse(File.ReadAllText(sfPath));
-            var dynamicRun = sf.RootElement.TryGetProperty("starforgeInventory", out var inventory)
-                && inventory.GetProperty("controlTransfers").EnumerateArray().Any(t =>
-                    t.GetProperty("operation").GetString() == "RUN"
-                    && t.TryGetProperty("programReferenceType", out var type) && type.GetString() == "DYNAMIC");
-            if (!dynamicRun)
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("dependencyCoverage", out _)
+                && root.TryGetProperty("dependencyAnalysisComplete", out var complete) && complete.ValueKind == JsonValueKind.False)
             {
-                continue;
-            }
-
-            using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(rekt, rel + "-deps.json")));
-            var targets = doc.RootElement.GetProperty("dependencies").EnumerateArray()
-                .Where(d => d.TryGetProperty("dependencyKind", out var kind) && kind.GetString() == "CICS_RUN")
-                .Select(d => d.GetProperty("callTarget").GetProperty("name").GetString()!)
-                .ToHashSet(StringComparer.Ordinal);
-            if (targets.Count > 0)
-            {
-                result[rel] = targets;
+                result.Add(rel);
             }
         }
 

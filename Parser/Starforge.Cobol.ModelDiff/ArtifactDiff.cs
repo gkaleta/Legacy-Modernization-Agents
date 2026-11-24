@@ -18,9 +18,13 @@ internal static class ArtifactDiff
         cmp.Keyed("deps.platform-projections", Projections(rektDeps, rel), Projections(sfDeps, rel));
     }
 
+    // REKT's evidence is only verifiable in the staged frame it was produced in, so its stored record stands for what the gate saw.
     public static void Evidence(Compare cmp, string sourceRoot, string rel, string rektRoot, string sfRoot)
     {
-        var left = RektEvidence.BuildEvidence(sourceRoot, rel, rektRoot, 0);
+        var stored = Path.Combine(rektRoot, rel + ".report", "dependency-evidence.json");
+        var left = File.Exists(stored)
+            ? JsonNode.Parse(File.ReadAllText(stored))!.AsObject()
+            : RektEvidence.BuildEvidence(sourceRoot, rel, rektRoot, 0);
         var right = RektEvidence.BuildEvidence(sourceRoot, rel, sfRoot, 0);
         cmp.Keyed("evidence.coverage", Members(left["coverage"]), Members(right["coverage"]));
         cmp.Keyed("evidence.definitions", Definitions(left), Definitions(right));

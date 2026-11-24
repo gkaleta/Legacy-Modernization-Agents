@@ -20,19 +20,17 @@ internal sealed partial class Classifier
     public const string RektNoOccurs = "REKT-WRONG no-OCCURS";
     public const string RepCopybookOrder = "REPRESENTATION copybook-order";
     public const string RepDataOrder = "REPRESENTATION data-order-by-section";
-    public const string GapCsdRun = "GAP csd-resolved-CICS-RUN";
-    public const string GapPlatformProjection = "GAP platform-copybook-projection";
-    public const string GapNativeContract = "GAP native-evidence-contract";
+    public const string GapNativeContract = "GAP native-dependency-contract";
     public const string Derived = "DERIVED";
 
-    private readonly Dictionary<string, HashSet<string>> _csdRuns;
+    private readonly HashSet<string> _nativeUnclaimed;
     private readonly Dictionary<(string Program, string Category), (int Explained, int Unexplained)> _stats = new();
     private ProgramEvidence? _evidence;
 
-    // csdRuns: program -> CICS RUN targets REKT bound through the estate's CSD (runtime contract) rather than the source.
-    public Classifier(Dictionary<string, HashSet<string>> csdRuns)
+    // nativeUnclaimed: programs whose Starforge export declares no native dependency coverage, so the gate cannot verify them.
+    public Classifier(HashSet<string> nativeUnclaimed)
     {
-        _csdRuns = csdRuns;
+        _nativeUnclaimed = nativeUnclaimed;
     }
 
     public void Begin(ProgramEvidence evidence) => _evidence = evidence;
@@ -57,15 +55,6 @@ internal sealed partial class Classifier
                 return RektNoLines;
             case "graph.structure-lines" when kind == DiffKind.Mismatch && rekt!.Split(" / ").All(p => p == "-1--1"):
                 return RektNoLines;
-
-            case "context.call-targets" or "context.call-lines" or "deps.discovered-edges" when kind == DiffKind.OnlyRekt:
-                return IsCsdRun(program, Base(key).Split(' ')[^1]) ? GapCsdRun : null;
-            case "facts.callees" when kind == DiffKind.OnlyRekt:
-                return IsCsdRun(program, Stem(key)) ? GapCsdRun : null;
-            case "facts.callers":
-                return _csdRuns.Any(r => r.Value.Contains(Stem(program))
-                    && (kind == DiffKind.OnlyStarforge ? key == "callers" : Base(key).EndsWith(" " + r.Key, StringComparison.Ordinal)))
-                    ? GapCsdRun : null;
 
             case "context.perform-edges" when e is not null:
                 return PerformEdge(e, kind, Base(key));
@@ -93,11 +82,6 @@ internal sealed partial class Classifier
                     return e.RektData.Values.Any(d => d.SourceSection == "LOCAL_STORAGE") ? null : RektNoLocalStorage;
                 }
 
-                if (key.Split('/')[0] is "DFHAID" or "DFHBMSCA")
-                {
-                    return GapPlatformProjection;
-                }
-
                 return item.Level == 77 && !e.RektData.Values.Any(d => d.Level == 77) ? RektNoLevel77 : null;
             }
 
@@ -110,12 +94,8 @@ internal sealed partial class Classifier
             case "context.data-order" when e is not null:
                 return SectionOrder(e, rekt!, sf!) ? RepDataOrder : null;
 
-            case "deps.platform-projections":
-                return Base(key).StartsWith("DFH", StringComparison.Ordinal)
-                    || (sf ?? "").StartsWith("invalid symbolic platform replacement", StringComparison.Ordinal) ? GapPlatformProjection : null;
-            case "evidence.diagnostics":
-                return key.StartsWith("native-export-source-unverified", StringComparison.Ordinal) || Base(key) == "commarea-closure-missing"
-                    ? GapNativeContract : null;
+            case "evidence.coverage" or "evidence.definitions" or "evidence.diagnostics":
+                return _nativeUnclaimed.Contains(program) ? GapNativeContract : null;
 
             case "facts.controlFlow":
                 return DerivedFrom(program, "context.perform-edges");
@@ -127,9 +107,6 @@ internal sealed partial class Classifier
 
         return null;
     }
-
-    private bool IsCsdRun(string program, string target) =>
-        _csdRuns.TryGetValue(program, out var targets) && targets.Contains(target);
 
     // Facts are computed from the RektContext, so a facts difference is explained when its source category differs only for proven reasons.
     private string? DerivedFrom(string program, string prefix)
@@ -208,8 +185,6 @@ internal sealed partial class Classifier
         var hash = key.LastIndexOf('#');
         return hash > 0 && hash < key.Length - 1 && key[(hash + 1)..].All(char.IsAsciiDigit) ? key[..hash] : key;
     }
-
-    private static string Stem(string pathOrKey) => Path.GetFileNameWithoutExtension(pathOrKey.Split(' ')[^1]);
 
     [GeneratedRegex(@"^FIL-R\d+$")]
     private static partial Regex FilR();
