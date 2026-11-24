@@ -6,13 +6,14 @@ public sealed class SourceFile
 {
     public const int TabStop = 8;
 
-    private SourceFile(string path, string text, string encoding, string[] lines, bool[] tabLines)
+    private SourceFile(string path, string text, string encoding, string[] lines, bool[] tabLines, string?[] compactLines)
     {
         Path = path;
         Text = text;
         Encoding = encoding;
         Lines = lines;
         TabExpanded = tabLines;
+        CompactLines = compactLines;
     }
 
     public string Path { get; }
@@ -26,6 +27,9 @@ public sealed class SourceFile
 
     public IReadOnlyList<bool> TabExpanded { get; }
 
+    // Fixed-form fallback for tab lines whose 8-column expansion pushes text past column 72; null elsewhere.
+    public IReadOnlyList<string?> CompactLines { get; }
+
     public static SourceFile Load(string path)
     {
         var bytes = File.ReadAllBytes(path);
@@ -38,6 +42,7 @@ public sealed class SourceFile
         var raw = SplitLines(text);
         var lines = new string[raw.Count];
         var tabs = new bool[raw.Count];
+        var compact = new string?[raw.Count];
         for (var i = 0; i < raw.Count; i++)
         {
             var line = raw[i];
@@ -45,12 +50,16 @@ public sealed class SourceFile
             {
                 tabs[i] = true;
                 line = ExpandTabs(line);
+                if (HasTextBeyond(line, SourceLine.ProgramAreaEnd))
+                {
+                    compact[i] = raw[i].Replace('\t', ' ');
+                }
             }
 
             lines[i] = line;
         }
 
-        return new SourceFile(path, text, encoding, lines, tabs);
+        return new SourceFile(path, text, encoding, lines, tabs, compact);
     }
 
     public static (string Text, string Encoding) Decode(byte[] bytes)
@@ -111,6 +120,19 @@ public sealed class SourceFile
         }
 
         return sb.ToString();
+    }
+
+    public static bool HasTextBeyond(string line, int column)
+    {
+        for (var i = column; i < line.Length; i++)
+        {
+            if (!char.IsWhiteSpace(line[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static List<string> SplitLines(string text)

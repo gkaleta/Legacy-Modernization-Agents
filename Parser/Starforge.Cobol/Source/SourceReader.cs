@@ -17,7 +17,7 @@ public static partial class SourceReader
         var state = new ReaderState(file, format, options);
         for (var i = 0; i < file.Lines.Count; i++)
         {
-            state.ProcessLine(i + 1, file.Lines[i], file.TabExpanded[i]);
+            state.ProcessLine(i + 1, file.Lines[i], file.TabExpanded[i], file.CompactLines[i]);
         }
 
         return state.Finish();
@@ -124,6 +124,8 @@ public static partial class SourceReader
         private int _firstTabLine;
         private int _tabOverflowLines;
         private int _firstTabOverflowLine;
+        private int _tabCompactLines;
+        private int _firstTabCompactLine;
 
         public ReaderState(SourceFile file, SourceFormat format, SourceReaderOptions options)
         {
@@ -134,16 +136,26 @@ public static partial class SourceReader
             _inPrologue = options.IsProgram;
         }
 
-        public void ProcessLine(int number, string raw, bool hadTabs)
+        public void ProcessLine(int number, string raw, bool hadTabs, string? compact)
         {
             if (_format == SourceFormat.Free)
             {
                 ProcessFree(number, raw, hadTabs);
+                return;
             }
-            else
+
+            // Tab-indented lines whose 8-column expansion would truncate code are read with one space per tab so the
+            // author's text (e.g. a full PIC X(25)) survives; the choice is reported, never silent.
+            if (compact is not null)
             {
-                ProcessFixed(number, raw, hadTabs);
+                raw = compact;
+                if (_tabCompactLines++ == 0)
+                {
+                    _firstTabCompactLine = number;
+                }
             }
+
+            ProcessFixed(number, raw, hadTabs);
         }
 
         public LogicalSource Finish()
@@ -163,9 +175,14 @@ public static partial class SourceReader
                 Diag("tab-expanded", DiagnosticSeverity.Info, $"{_tabLines} line(s) contain tabs; expanded to {SourceFile.TabStop}-column stops before column rules were applied", _firstTabLine, 1);
             }
 
+            if (_tabCompactLines > 0)
+            {
+                Diag("tab-expanded-compact", DiagnosticSeverity.Warning, $"{_tabCompactLines} line(s) would extend past column {ProgramAreaEnd} with {SourceFile.TabStop}-column tab stops; each tab was expanded to one space instead", _firstTabCompactLine, 1);
+            }
+
             if (_tabOverflowLines > 0)
             {
-                Diag("tab-overflow", DiagnosticSeverity.Warning, $"{_tabOverflowLines} line(s) with tabs extend past column {ProgramAreaEnd} after expansion; the text beyond it is ignored", _firstTabOverflowLine, ProgramAreaEnd + 1);
+                Diag("tab-overflow", DiagnosticSeverity.Warning, $"{_tabOverflowLines} line(s) with tabs extend past column {ProgramAreaEnd} even after expansion; the text beyond it is ignored", _firstTabOverflowLine, ProgramAreaEnd + 1);
             }
 
             return new LogicalSource(_file, _initialFormat, _lines, _text.ToString(), _runs, _marks, _diagnostics);

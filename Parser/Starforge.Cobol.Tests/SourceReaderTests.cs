@@ -95,7 +95,7 @@ public sealed class SourceReaderTests
     }
 
     [Fact]
-    public void TabsPushingCodePastColumn72AreReported()
+    public void TabLinesThatWouldOverflowColumn72FallBackToOneSpacePerTab()
     {
         using var estate = new TestEstate();
         var r = estate.Program(
@@ -103,9 +103,26 @@ public sealed class SourceReaderTests
             "\t\t     05  CUST-FIRST-NAME                         PIC X(25).",
             "\t\t     05  OK PIC X.");
 
-        var warning = r.Diagnostics.Should().ContainSingle(d => d.Code == "tab-overflow").Subject;
+        var warning = r.Diagnostics.Should().ContainSingle(d => d.Code == "tab-expanded-compact").Subject;
         warning.Severity.Should().Be(DiagnosticSeverity.Warning);
         warning.Range!.Value.StartLine.Should().Be(2);
+        warning.Fingerprint.Should().Be("tab-expanded-compact");
+        r.Diagnostics.Should().NotContain(d => d.Code == "tab-overflow");
+        r.Texts().Should().Contain("X(25)");
+        r.Where("CUST-FIRST-NAME").Should().Be((2, 12, 2, 26, "MAIN.cbl"));
+        r.Where("OK").Should().Be((3, 26, 3, 27, "MAIN.cbl"));
+    }
+
+    [Fact]
+    public void TabLinesThatOverflowEvenWithOneSpacePerTabAreReported()
+    {
+        using var estate = new TestEstate();
+        var r = estate.Program(
+            Fixed.A("01  REC."),
+            "\t" + new string(' ', 10) + "05  CUST-FIRST-NAME" + new string(' ', 35) + "PIC X(25).");
+
+        r.Diagnostics.Select(d => d.Code).Should().Contain(new[] { "tab-expanded-compact", "tab-overflow" });
+        r.Diagnostics.Single(d => d.Code == "tab-overflow").Severity.Should().Be(DiagnosticSeverity.Warning);
         r.Texts().Should().Contain("X(2");
     }
 
