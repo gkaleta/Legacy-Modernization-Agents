@@ -179,9 +179,11 @@ public static class NativeProducer
 
     private static readonly string[] RootKeys = ["node", "children", "range", "textSha256"];
 
+    // A root from COPY ... REPLACING text also carries the "replacing" proof of the COPY statement.
     public static bool IsStarforgeNode(JsonNode? node) =>
         node is JsonObject obj && PyJson.IsStr(Get(obj, "node")) && Get(obj, "children") is JsonArray
-        && (obj.Count == 2 || obj.Count == 4 && RootKeys.All(obj.ContainsKey));
+        && (obj.Count == 2 || obj.Count == 4 && RootKeys.All(obj.ContainsKey)
+            || obj.Count == 5 && RootKeys.All(obj.ContainsKey) && obj.ContainsKey("replacing"));
 
     public static bool IsStarforgeNode(JsonElement node)
     {
@@ -190,7 +192,8 @@ public static class NativeProducer
             || children.ValueKind != JsonValueKind.Array)
             return false;
         var count = node.EnumerateObject().Count();
-        return count == 2 || count == 4 && node.TryGetProperty("range", out _) && node.TryGetProperty("textSha256", out _);
+        return count == 2 || (count == 4 || count == 5 && node.TryGetProperty("replacing", out _))
+            && node.TryGetProperty("range", out _) && node.TryGetProperty("textSha256", out _);
     }
 
     public static IReadOnlyList<string> Roles(JsonNode? node)

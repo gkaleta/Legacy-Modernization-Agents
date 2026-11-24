@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using Starforge.Cobol.Copy;
 using Starforge.Cobol.Lexing;
+using Starforge.Cobol.Source;
 
 namespace Starforge.Cobol.Native;
 
@@ -85,7 +87,8 @@ internal sealed class SyntaxRoots
         var range = origin.Range;
         var text = Read(range.File);
         var slice = text is null ? null : NativeSyntax.Slice(text, range.StartLine, range.StartColumn, range.EndLine, range.EndColumn);
-        if (origin.FromReplacement || startOrigin.Unit != endOrigin.Unit || slice is null)
+        var replacing = origin.FromReplacement && startOrigin.Unit == endOrigin.Unit && slice is not null ? Replacing(origin.Unit) : null;
+        if (origin.FromReplacement && replacing is null || startOrigin.Unit != endOrigin.Unit || slice is null)
         {
             Problems.Add($"syntax-range-unavailable:{what}");
         }
@@ -97,7 +100,82 @@ internal sealed class SyntaxRoots
             ["end"] = new JsonArray(range.EndLine, range.EndColumn),
         };
         node["textSha256"] = NativeSyntax.Sha256(slice ?? string.Empty);
+        if (replacing is not null)
+        {
+            node["replacing"] = replacing;
+        }
+
         return node;
+    }
+
+    // Copybook text changed by COPY ... REPLACING is proved by the including statement: one range per
+    // non-blank source line, program area only, so the gate can re-read it and re-apply the pseudo-text pairs.
+    private JsonObject? Replacing(int unitId)
+    {
+        var unit = _result.Expanded.Units[unitId];
+        if (!unit.Replacing || unit.IncludedAt is not { } at || unit.ParentId < 0)
+        {
+            return null;
+        }
+
+        var parent = _result.Expanded.Units[unit.ParentId].Source;
+        var text = Read(parent.Path);
+        if (text is null)
+        {
+            return null;
+        }
+
+        var pieces = new JsonArray();
+        for (var number = at.StartLine; number <= at.EndLine; number++)
+        {
+            var line = parent.Lines.Count >= number && parent.Lines[number - 1].Number == number
+                ? parent.Lines[number - 1]
+                : parent.Lines.FirstOrDefault(l => l.Number == number);
+            if (line is null || line.HadTabs || line.Kind is not (SourceLineKind.Code or SourceLineKind.Blank or SourceLineKind.Comment))
+            {
+                return null;
+            }
+
+            if (line.Kind is not SourceLineKind.Code)
+            {
+                continue;
+            }
+
+            var first = line.Format == SourceFormat.Fixed ? SourceLine.ProgramAreaStart : 1;
+            var last = line.Format == SourceFormat.Fixed ? Math.Min(SourceLine.ProgramAreaEnd, line.Text.Length) : line.Text.Length;
+            first = number == at.StartLine ? Math.Max(first, at.StartColumn) : first;
+            last = number == at.EndLine ? Math.Min(last, at.EndColumn) : last;
+            while (first <= last && char.IsWhiteSpace(line.Text[first - 1]))
+            {
+                first++;
+            }
+
+            while (last >= first && char.IsWhiteSpace(line.Text[last - 1]))
+            {
+                last--;
+            }
+
+            if (first > last)
+            {
+                continue;
+            }
+
+            var slice = NativeSyntax.Slice(text, number, first, number, last);
+            if (slice is null || slice != line.Text.Substring(first - 1, last - first + 1))
+            {
+                return null;
+            }
+
+            pieces.Add(new JsonObject
+            {
+                ["path"] = Path.GetFullPath(parent.Path),
+                ["start"] = new JsonArray(number, first),
+                ["end"] = new JsonArray(number, last),
+                ["textSha256"] = NativeSyntax.Sha256(slice),
+            });
+        }
+
+        return pieces.Count == 0 ? null : new JsonObject { ["statement"] = pieces };
     }
 
     public JsonObject RootTokens(JsonObject node, int firstToken, int endToken, string what)

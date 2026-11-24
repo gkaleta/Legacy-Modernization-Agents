@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace CobolToQuarkusMigration.Agents.Infrastructure.Rekt;
 
@@ -87,6 +88,15 @@ public static partial class RektEvidence
             return;
         }
         var compact = Compact(slice);
+        if (node.ContainsKey("replacing"))
+        {
+            if (Replaced(Get(node, "replacing"), path, compact, files, root, texts) is not { } replaced)
+            {
+                errors.Add($"starforge-syntax-root-replacing-invalid:{kind}");
+                return;
+            }
+            compact = replaced;
+        }
         var at = 0;
         foreach (var token in Tokens(SyntaxNodes(node)))
         {
@@ -100,6 +110,66 @@ public static partial class RektEvidence
             }
             at = found + word.Length;
         }
+    }
+
+    private static readonly Regex CopyReplacing = new(
+        @"^COPY\s+(?:""([^""]+)""|'([^']+)'|([A-Z0-9$#@-]+))(?:\s+(?:OF|IN)\s+\S+)?\s+REPLACING((?:\s*==(?:(?!==).)*==\s*BY\s*==(?:(?!==).)*==)+)\s*\.?$",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+
+    private static readonly Regex PseudoTextPair = new(@"==((?:(?!==).)*)==\s*BY\s*==((?:(?!==).)*)==",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+
+    // The proof is the COPY statement that included the root's copybook, one hash-bound range per source line
+    // (so fixed-format sequence areas stay out). Its pseudo-text pairs, applied first-match left to right,
+    // turn the copybook text into the text the tokens were parsed from.
+    private static string? Replaced(JsonNode? replacing, string copybook, string compact, HashSet<string> files, string root,
+        Dictionary<string, string> texts)
+    {
+        if (replacing is not JsonObject proof || proof.Count != 1 || Get(proof, "statement") is not JsonArray { Count: > 0 } pieces)
+            return null;
+        var lines = new List<string>();
+        string? file = null;
+        long previous = 0;
+        foreach (var piece in pieces)
+        {
+            if (Str(piece, "path") is not { } path || !IsAbsolute(path) || Get(piece, "start") is not JsonArray { Count: 2 } start
+                || Get(piece, "end") is not JsonArray { Count: 2 } end || !start.Concat(end).All(item => IsInt(item, out _))
+                || Str(piece, "textSha256") is not { } sha || ((JsonObject)piece!).Count != 4)
+                return null;
+            path = PyCompat.Resolve(path);
+            IsInt(start[0], out var line);
+            IsInt(start[1], out var startColumn);
+            IsInt(end[0], out var endLine);
+            IsInt(end[1], out var endColumn);
+            if (file is not null && path != file || line != endLine || line <= previous) return null;
+            if (file is null && (!files.Contains(path) || !IsRelativeTo(path, root) || !File.Exists(path))) return null;
+            file = path;
+            previous = line;
+            if (!texts.TryGetValue(path, out var text)) texts[path] = text = PyCompat.ReadText(path, PyCompat.Latin1);
+            var slice = SourceSlice(text, line, startColumn, endLine, endColumn);
+            if (slice is null || PyCompat.Digest(PyCompat.Latin1.GetBytes(slice)) != sha) return null;
+            lines.Add(slice);
+        }
+        var statement = CopyReplacing.Match(string.Join(' ', lines).Trim());
+        if (!statement.Success) return null;
+        var name = new[] { 1, 2, 3 }.Select(group => statement.Groups[group]).First(group => group.Success).Value;
+        if (!string.Equals(Path.GetFileNameWithoutExtension(name), Path.GetFileNameWithoutExtension(copybook), StringComparison.OrdinalIgnoreCase))
+            return null;
+        var pairs = PseudoTextPair.Matches(statement.Groups[4].Value).Select(pair => (From: Compact(pair.Groups[1].Value), To: Compact(pair.Groups[2].Value))).ToList();
+        if (pairs.Any(pair => pair.From.Length == 0)) return null;
+        var builder = new StringBuilder();
+        for (var index = 0; index < compact.Length;)
+        {
+            var match = pairs.FindIndex(pair => string.Compare(compact, index, pair.From, 0, pair.From.Length, StringComparison.OrdinalIgnoreCase) == 0);
+            if (match < 0)
+            {
+                builder.Append(compact[index++]);
+                continue;
+            }
+            builder.Append(pairs[match].To);
+            index += pairs[match].From.Length;
+        }
+        return builder.ToString();
     }
 
     // Lines split on '\n' with a trailing '\r' dropped; columns are 1-based and the end column is inclusive.
