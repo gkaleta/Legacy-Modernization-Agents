@@ -165,7 +165,7 @@ public static partial class RektEvidence
             errors.Add("dynamic-CALL-target-unresolved");
 
         var byName = new Dictionary<string, List<string>>();
-        foreach (var path in OriginalFiles(sourceRoot))
+        foreach (var path in OriginalFiles(EstateRoot(sourceRoot, relativePath, stagingRoot) ?? sourceRoot))
             if (PyCompat.Suffix(path).ToLowerInvariant() is ".cpy" or ".cpb")
             {
                 var stem = PyCompat.Stem(path).ToUpperInvariant();
@@ -310,6 +310,18 @@ public static partial class RektEvidence
         {
             return false;
         }
+    }
+
+    // A named estate's staging holds only that estate's copybooks, so a same-named copybook in
+    // another estate must not be chosen as the definition; .root and .all keep the whole tree.
+    private static string? EstateRoot(string sourceRoot, string relativePath, string? stagingRoot)
+    {
+        if (stagingRoot is null) return null;
+        var estate = Path.GetFileName(Path.TrimEndingDirectorySeparator(stagingRoot));
+        if (estate.Length == 0 || estate.StartsWith('.') || !relativePath.StartsWith(estate + "/", StringComparison.Ordinal))
+            return null;
+        var root = Path.Join(sourceRoot, estate);
+        return Directory.Exists(root) ? root : null;
     }
 
     // pathlib orders paths part by part, so "a/b" sorts before "a-c/x".

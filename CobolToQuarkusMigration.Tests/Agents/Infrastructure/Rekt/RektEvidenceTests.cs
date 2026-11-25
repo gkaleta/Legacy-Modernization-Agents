@@ -435,6 +435,16 @@ public sealed class RektEvidenceTests : RektEvidenceFixture
     }
 
     [Fact]
+    public void SameNamedCopybookInAnotherEstate_DoesNotReplaceTheStagedDefinition()
+    {
+        var staging = Path.Join(Work, "staging", "estate");
+        Stage(ProgramPath, Path.Join(staging, Relative));
+        Stage(DefinitionPath, Path.Join(staging, "REAL.cpy"));
+        Write("another/copy/REAL.cpy", "       01 REAL-FIELD PIC X.\n");
+        Strings(Build(staging: staging)["unresolvedDiagnostics"]).Should().NotContain("unverified-staged-copybook:REAL");
+    }
+
+    [Fact]
     public void OldCompleteClaim_CannotHideChangedDefinitionOrEmptyCopyExport()
     {
         NativeExport();
