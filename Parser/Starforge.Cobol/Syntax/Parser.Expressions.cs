@@ -536,9 +536,25 @@ internal sealed partial class Parser
         var op = ParseRelationalOperator();
         if (op is not null)
         {
-            var right = ParseExpression();
             _impliedSubject = subject;
             _impliedOperator = op.Value;
+            // IBM accepts a parenthesised object list: X = (A OR B) means X = A OR X = B.
+            if (!AtEnd && Cur.Kind == TokenKind.LeftParen && HasTopLevelLogical(_pos))
+            {
+                Next();
+                var objects = ParseOr(afterLogical: true);
+                if (AtEnd || Cur.Kind != TokenKind.RightParen)
+                {
+                    throw Expected(") in abbreviated condition");
+                }
+
+                Next();
+                _impliedSubject = subject;
+                _impliedOperator = op.Value;
+                return objects;
+            }
+
+            var right = ParseExpression();
             return new RelationCondition(SpanFrom(first), subject, op.Value, right, Abbreviated: false);
         }
 
@@ -584,6 +600,30 @@ internal sealed partial class Parser
         }
 
         throw new ParseFailure("invalid-condition", "Expected a condition");
+    }
+
+    private bool HasTopLevelLogical(int open)
+    {
+        var close = MatchingParen(open);
+        var depth = 0;
+        for (var k = open + 1; k < close; k++)
+        {
+            var kind = _ts[k].Kind;
+            if (kind == TokenKind.LeftParen)
+            {
+                depth++;
+            }
+            else if (kind == TokenKind.RightParen)
+            {
+                depth--;
+            }
+            else if (depth == 0 && (IsWord(k, "OR") || IsWord(k, "AND")))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // '(' starts an arithmetic expression when what follows its matching ')' continues an expression or relation.

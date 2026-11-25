@@ -155,6 +155,31 @@ public sealed class SyntaxTests
     }
 
     [Fact]
+    public void FileDescriptionAcceptsMixedRecordsIsAndRecordAre()
+    {
+        using var estate = new TestEstate();
+        var r = estate.Program(
+            A("IDENTIFICATION DIVISION."),
+            A("PROGRAM-ID. MAIN."),
+            A("ENVIRONMENT DIVISION."),
+            A("INPUT-OUTPUT SECTION."),
+            A("FILE-CONTROL."),
+            B("SELECT FFILE ASSIGN TO FDD."),
+            A("DATA DIVISION."),
+            A("FILE SECTION."),
+            A("FD  FFILE"),
+            B("LABEL RECORDS IS STANDARD"),
+            B("DATA RECORD ARE F-REC."),
+            A("01  F-REC PIC X(80)."),
+            A("PROCEDURE DIVISION."));
+
+        var fd = r.Syntax.Programs.Single().Data!.Sections[0].Files.Single();
+        fd.LabelRecords.Should().Equal("STANDARD");
+        fd.DataRecords.Should().Equal("F-REC");
+        r.Diagnostics.Where(d => d.Severity != DiagnosticSeverity.Info).Should().BeEmpty();
+    }
+
+    [Fact]
     public void ErrorRecoveryResyncsAtNextLevelNumber()
     {
         using var estate = new TestEstate();

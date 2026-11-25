@@ -452,15 +452,15 @@ internal sealed partial class Parser
     private bool FdClauseBoundary(int i)
         => DataBoundary(i) || (_ts[i].Kind == TokenKind.Word && FdClauseWords.Contains(Text(i)) && !IsWord(i, "IS"));
 
+    // IBM accepts the mixed forms RECORDS IS and RECORD ARE in production code.
     private void AcceptRecordIsAre()
     {
-        if (AcceptWord("RECORD"))
+        if (AcceptWord("RECORD") || AcceptWord("RECORDS"))
         {
-            AcceptWord("IS");
-        }
-        else if (AcceptWord("RECORDS"))
-        {
-            AcceptWord("ARE");
+            if (!AcceptWord("IS"))
+            {
+                AcceptWord("ARE");
+            }
         }
     }
 

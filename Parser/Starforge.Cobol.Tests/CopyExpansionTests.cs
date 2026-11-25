@@ -131,6 +131,32 @@ public sealed class CopyExpansionTests
     }
 
     [Fact]
+    public void DashCopyIncludesPlainFormsAndReportsMissingOrPrefixedCopybooks()
+    {
+        using var estate = new TestEstate();
+        estate.Write("copy/PLAIN.cpy", B("05 P-FLD PIC X."));
+        estate.Write("copy/PFXD.cpy", B("05 FLD PIC X."));
+        var r = estate.Program(
+            A("01 REC."),
+            B("    03 -COPY PLAIN"),
+            B("    03  -COPY GONE  -PRE G-"),
+            B("    03  -COPY PFXD  -PRE M-."),
+            A("01 NEXT-ITEM PIC X."));
+
+        r.Texts().Should().Equal("01", "REC", ".", "03", "05", "P-FLD", "PIC", "X", ".", "03", "03", "01", "NEXT-ITEM", "PIC", "X", ".");
+        r.Inclusions.Select(i => (i.Name, i.Status)).Should().Equal(
+            ("PLAIN", CopyStatus.Resolved),
+            ("GONE", CopyStatus.Missing),
+            ("PFXD", CopyStatus.Malformed));
+        r.Diagnostics.Where(d => d.Code is "missing-copybook" or "copy-prefix-unsupported")
+            .Select(d => d.Fingerprint).Should().Equal("missing-copybook:GONE", "copy-prefix-unsupported:PFXD");
+        r.Coverage.ByReason.Should().Contain("Directive(copy-statement)", "-COPYPLAIN".Length);
+        r.Coverage.ByReason.Should().Contain("Unresolved(missing-copybook:GONE)", "-COPYGONE-PREG-".Length);
+        r.Coverage.ByReason.Should().Contain("Unsupported(copy-prefix-unsupported)", "-COPYPFXD-PREM-.".Length);
+        r.Coverage.Unaccounted.Should().Be(0);
+    }
+
+    [Fact]
     public void CopybookExtensionWinsOverAProgramWithTheSameName()
     {
         using var estate = new TestEstate();

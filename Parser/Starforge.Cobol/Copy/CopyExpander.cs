@@ -95,6 +95,12 @@ internal sealed class CopyExpander
                 continue;
             }
 
+            if (ReplacingParser.Is(text, w, "-COPY") && i + 1 < words.Count && words[i + 1].Kind == TextWordKind.Word)
+            {
+                i = ExpandDashCopy(unit, source, words, i, output, ref cursor);
+                continue;
+            }
+
             if (!ReplacingParser.Is(text, w, "COPY"))
             {
                 continue;
@@ -125,6 +131,44 @@ internal sealed class CopyExpander
         }
 
         output.Append(source, cursor, text.Length);
+    }
+
+    // Site precompilers accept `-COPY NAME [-PRE PREFIX-][.]`; plain forms behave like COPY.
+    // The -PRE renaming rule is site-specific, so a found copybook is flagged instead of guessed.
+    private int ExpandDashCopy(SourceUnit unit, OriginText source, List<TextWord> words, int i, OriginTextBuilder output, ref int cursor)
+    {
+        var text = source.Text;
+        var start = words[i].Start;
+        var name = text.Substring(words[i + 1].Start, words[i + 1].Length);
+        var last = i + 1;
+        string? prefix = null;
+        if (last + 2 < words.Count && ReplacingParser.Is(text, words[last + 1], "-PRE") && words[last + 2].Kind == TextWordKind.Word)
+        {
+            prefix = text.Substring(words[last + 2].Start, words[last + 2].Length);
+            last += 2;
+        }
+
+        if (last + 1 < words.Count && words[last + 1].Kind == TextWordKind.Period)
+        {
+            last++;
+        }
+
+        var end = words[last].End;
+        output.Append(source, cursor, start);
+        cursor = end;
+        var normalized = CopybookResolver.NormalizeName(name);
+        if (prefix is not null && _resolver.Resolve(normalized, null, unit.Path, _programPath) is { Found: true } found)
+        {
+            var range = unit.Source.RangeOf(start, end);
+            _diagnostics.Add(Diagnostic.Create("copy-prefix-unsupported", DiagnosticSeverity.Error,
+                $"-COPY {normalized.ToUpperInvariant()} -PRE {prefix} needs this site's prefix rule; the copybook was not expanded", range, normalized.ToUpperInvariant()));
+            _accounting.Mark(unit.Id, start, end, CoverageClass.Unsupported, "copy-prefix-unsupported");
+            _inclusions.Add(new CopyInclusion(CopyStatementKind.Copy, normalized, null, false, 0, unit.Id, -1, range, CopyStatus.Malformed, found.Path, found.Stage, found.OtherCandidates));
+            return last;
+        }
+
+        Include(unit, output, CopyStatementKind.Copy, start, end, name, null, false, Array.Empty<ReplacingPair>());
+        return last;
     }
 
     private void Include(SourceUnit parent, OriginTextBuilder output, CopyStatementKind kind, int start, int end, string rawName, string? library, bool suppress, IReadOnlyList<ReplacingPair> pairs)

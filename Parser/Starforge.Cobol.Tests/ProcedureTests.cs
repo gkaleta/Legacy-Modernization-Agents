@@ -79,6 +79,11 @@ public class ProcedureTests
     [InlineData("FUNCTION LENGTH(X) > 3 AND X(1:2) = 'AB'", "((FUNCTION LENGTH(X) > 3) AND (X(1:2) = 'AB'))")]
     [InlineData("ENT-KEY(IX) = A AND ENT-VAL OF ENT(1) NOT = SPACES", "((ENT-KEY(IX) = A) AND (ENT-VAL OF ENT(1) <> SPACE))")]
     [InlineData("X = ALL '*' OR LENGTH OF X > 0", "((X = ALL '*') OR (LENGTH OF X > 0))")]
+    [InlineData("A = (1 OR 2)", "((A = 1) OR (A = 2))")]
+    [InlineData("X(1:2) = ('AB' OR 'CD' OR 'EF')", "(((X(1:2) = 'AB') OR (X(1:2) = 'CD')) OR (X(1:2) = 'EF'))")]
+    [InlineData("A = (B OR C) AND D > 0", "(((A = B) OR (A = C)) AND (D > 0))")]
+    [InlineData("A NOT = (1 AND 2)", "((A <> 1) AND (A <> 2))")]
+    [InlineData("A = (B + 1)", "(A = (B + 1))")]
     public void ConditionsFollowPrecedenceAndExpandAbbreviations(string condition, string expected)
     {
         using var estate = new TestEstate();
