@@ -197,6 +197,20 @@ public sealed class RektSourceIdentityTests : IDisposable
         rows.Should().BeEmpty();
     }
 
+    [Fact]
+    public void CopyIdms_NamesItsMember_AndACopybookCalledIdmsStillCounts()
+    {
+        var text = string.Join("\n",
+            "       01  COPY IDMS SUBSCH-CTRL.",
+            "           COPY IDMS RECORD EMPREC VERSION 2.",
+            "           COPY IDMS MAP-CONTROL MAPCTL.",
+            "           COPY IDMS INVENTORY.",
+            "           COPY IDMS.",
+            "           COPY IDMS OF SYSLIB.");
+
+        RektSourceIdentity.ReferencedNames(text).Should().BeEquivalentTo(["SUBSCH-CTRL", "EMPREC", "MAPCTL", "INVENTORY", "IDMS"]);
+    }
+
     private void Write(string relative, string text)
     {
         var path = Path.Join(_source, relative);

@@ -28,7 +28,7 @@ public static class EstateSourceScanner
     private static readonly Regex ProgramIdRx = new(@"\bPROGRAM-ID\s*\.?\s*['""]?(" + Name + ")", Opts);
     private static readonly Regex CallLiteral = new(@"(?<![\w-])CALL\s+['""](" + Name + @")['""]", Opts);
     private static readonly Regex CallVariable = new(@"(?<![\w-])CALL\s+(" + Name + @")\b", Opts);
-    private static readonly Regex CopyRx = new(@"(?<![\w-])COPY\s+['""]?(" + Name + @")['""]?", Opts);
+    private static readonly Regex CopyRx = new(@"(?<![\w-])COPY\s+" + CobolToQuarkusMigration.Helpers.CopyStatementSyntax.IdmsPrefix + @"['""]?(" + Name + @")['""]?", Opts);
     private static readonly Regex MoveLiteral = new(@"(?<![\w-])MOVE\s+['""](" + Name + @")['""]\s+TO\s+(" + Name + ")", Opts);
     private static readonly Regex ValueLiteral = new(@"\b\d{1,2}\s+(" + Name + @")\b[^.]*?\bVALUE\s+(?:IS\s+)?['""](" + Name + @")['""]", Opts);
     private static readonly Regex SelectAssign = new(@"(?<![\w-])SELECT\s+(?:OPTIONAL\s+)?" + Name + @"\s+ASSIGN\s+(?:TO\s+)?['""]?(" + Name + ")", Opts);

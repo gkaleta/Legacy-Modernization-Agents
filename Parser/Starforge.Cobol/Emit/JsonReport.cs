@@ -87,6 +87,11 @@ public static class JsonReport
                 w.WriteBoolean("suppress", true);
             }
 
+            if (inc.Idms)
+            {
+                w.WriteBoolean("idms", true);
+            }
+
             if (inc.ReplacingPairs > 0)
             {
                 w.WriteNumber("replacingPairs", inc.ReplacingPairs);

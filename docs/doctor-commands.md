@@ -141,6 +141,7 @@ Any other value stops the command with exit code 1. With `starforge`, each `*-de
 - `EXEC SQL` statements, host variables and cursors, with tables bound to `REKT_SQL_DECLARATIONS`
 - `EXEC CICS` file, queue, time, container, LINK, XCTL, RETURN, RUN TRANSID and BMS map commands, with files, programs and transactions bound to `REKT_CICS_RESOURCE_DEFINITIONS` and map layouts to the BMS mapsets
 - program names that reach an XCTL or LINK through data items or the COMMAREA, proved from the assignments that can reach the command or from the estate's COMMAREA closure, which `rekt-parse` computes in a second pass
+- CA IDMS programs: `COPY IDMS`, the IDMS sections, DML statements, and `TRANSFER CONTROL` targets exported as `IDMS_TRANSFER`; see [CA IDMS programs](idms-dialect.md)
 
 Starforge reads the same inputs as REKT: `REKT_DEPENDENCY_PROFILE`, `REKT_CICS_RESOURCE_DEFINITIONS`, `REKT_SQL_DECLARATIONS` and `REKT_PLATFORM_CONTRACTS`. A construct it cannot prove gets a `starforge-unsupported:*`, `dynamic-call-unsupported:*` or `cics-commarea-closure-pending:*` diagnostic, and the program stays blocked; Starforge never guesses a target. In the sample estates all 73 programs are eligible with `starforge`, as with `rekt`. The comparison in `both` is informational; a failed comparison does not fail the parse.
 

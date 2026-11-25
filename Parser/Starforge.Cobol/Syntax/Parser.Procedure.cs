@@ -70,7 +70,7 @@ internal sealed partial class Parser
         }
 
         var w = Up(i);
-        return w == "NEXT" ? IsWord(i + 1, "SENTENCE") : SupportedVerbs.Contains(w) || UnsupportedVerbs.Contains(w);
+        return w == "NEXT" ? IsWord(i + 1, "SENTENCE") : SupportedVerbs.Contains(w) || UnsupportedVerbs.Contains(w) || (_idms && IdmsForm(i) is not null);
     }
 
     private static readonly HashSet<string> ScopeTerminators = new(StringComparer.Ordinal)
@@ -89,7 +89,8 @@ internal sealed partial class Parser
 
     private bool IsParagraphHeader(int i)
         => i < _ts.Count && IsPeriod(i + 1)
-            && ((_ts[i].Kind == TokenKind.Word && !IsReserved(Up(i))) || (_ts[i].Kind == TokenKind.IntegerLiteral && char.IsDigit(_ts.Text(i)[0])));
+            && ((_ts[i].Kind == TokenKind.Word && !IsReserved(Up(i)) && !(_idms && IdmsForm(i) is not null))
+                || (_ts[i].Kind == TokenKind.IntegerLiteral && char.IsDigit(_ts.Text(i)[0])));
 
     private bool IsEndDeclaratives(int i) => IsWord(i, "END") && IsWord(i + 1, "DECLARATIVES");
 
@@ -123,6 +124,8 @@ internal sealed partial class Parser
         {
             _classNames.Add(c.Name);
         }
+
+        _idms = _idmsOption || env?.IdmsControl is not null || data?.IdmsSchema is not null || data?.IdmsMaps is { Count: > 0 };
     }
 
     private (IReadOnlyList<ProcedureSection> Declaratives, IReadOnlyList<ProcedureSection> Sections) ParseProcedureBody()
@@ -309,6 +312,11 @@ internal sealed partial class Parser
             if (Cur.Kind == TokenKind.ExecBlock)
             {
                 return ParseExec();
+            }
+
+            if (_idms && IdmsForm(_pos) is { } form)
+            {
+                return ParseIdms(form);
             }
 
             var verb = Up(_pos);

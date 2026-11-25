@@ -99,7 +99,11 @@ public sealed record EnvironmentDivision(
     SourceRange Range,
     ConfigurationSection? Configuration,
     InputOutputSection? InputOutput,
-    IReadOnlyList<ErrorNode> Errors) : SyntaxNode(Span, Range);
+    IReadOnlyList<ErrorNode> Errors,
+    IdmsControlSection? IdmsControl = null) : SyntaxNode(Span, Range);
+
+// CA IDMS IDMS-CONTROL SECTION: PROTOCOL. [MODE IS mode [DEBUG]] [SUBSCHEMA-NAMES LENGTH IS n] [IDMS-RECORDS ...].
+public sealed record IdmsControlSection(NodeSpan Span, SourceRange Range, string? Mode, bool Debug, string? Records) : SyntaxNode(Span, Range);
 
 public sealed record ConfigurationSection(
     NodeSpan Span,

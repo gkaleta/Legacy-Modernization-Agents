@@ -20,7 +20,7 @@ public static class RektSourceIdentity
     private const string Name = "['\"]?([A-Za-z0-9#@$_-]+)";
     private static readonly Regex[] ReferencePatterns =
     [
-        new(@"(?<![A-Za-z0-9-])COPY\s+" + Name, Options),
+        new(@"(?<![A-Za-z0-9-])COPY\s+" + CobolToQuarkusMigration.Helpers.CopyStatementSyntax.IdmsPrefix + Name, Options),
         new(@"\bEXEC\s+SQL\s+INCLUDE\s+" + Name, Options),
         new(@"\+\+INCLUDE\s+" + Name, Options),
         new(@"^\s*-INC\s+" + Name, Options),

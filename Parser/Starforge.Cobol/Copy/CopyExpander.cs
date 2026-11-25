@@ -106,6 +106,12 @@ internal sealed class CopyExpander
                 continue;
             }
 
+            if (IsIdmsCopy(text, words, i))
+            {
+                i = ExpandIdmsCopy(unit, source, words, i, output, ref cursor);
+                continue;
+            }
+
             var copy = ParseCopy(source, words, i);
             output.Append(source, cursor, copy.Start);
             if (copy.Error is { Code: "copy-period-expected" })
@@ -171,7 +177,112 @@ internal sealed class CopyExpander
         return last;
     }
 
-    private void Include(SourceUnit parent, OriginTextBuilder output, CopyStatementKind kind, int start, int end, string rawName, string? library, bool suppress, IReadOnlyList<ReplacingPair> pairs)
+    // CA IDMS precompiler directive (Broadcom "DML Reference for COBOL", Precompiler-Directive Statements):
+    //   [level] COPY IDMS {member | RECORD rec | FILE f | MODULE m | LR lr | MAP map | MAP-CONTROL map}
+    //       [VERSION n] [REDEFINES rec] [SIZE IS n] .
+    // The precompiler copies the member from the data dictionary; here the member is an estate copybook (a dictionary
+    // punch or precompiler listing). COPY IDMS DEPT. or COPY IDMS OF LIB. stay ordinary COPY of a copybook named IDMS.
+    private static readonly HashSet<string> IdmsNamedForms = new(StringComparer.OrdinalIgnoreCase) { "RECORD", "FILE", "MODULE", "LR", "MAP", "MAP-CONTROL" };
+    private static readonly HashSet<string> IdmsClauseWords = new(StringComparer.OrdinalIgnoreCase) { "VERSION", "REDEFINES", "SIZE" };
+
+    private static bool IsIdmsCopy(string text, List<TextWord> words, int i)
+        => i + 2 < words.Count && ReplacingParser.Is(text, words[i + 1], "IDMS") && words[i + 2].Kind == TextWordKind.Word
+            && !ReplacingParser.Is(text, words[i + 2], "OF") && !ReplacingParser.Is(text, words[i + 2], "IN")
+            && !ReplacingParser.Is(text, words[i + 2], "SUPPRESS") && !ReplacingParser.Is(text, words[i + 2], "REPLACING");
+
+    private int ExpandIdmsCopy(SourceUnit unit, OriginText source, List<TextWord> words, int i, OriginTextBuilder output, ref int cursor)
+    {
+        var text = source.Text;
+        string Word(int k) => text.Substring(words[k].Start, words[k].Length);
+        int? level = null;
+        if (i > 0 && words[i - 1].Start >= cursor && words[i - 1].Kind == TextWordKind.Word && words[i - 1].Length <= 2
+            && Word(i - 1).All(char.IsAsciiDigit) && int.Parse(Word(i - 1)) is >= 1 and <= 48 and var lv)
+        {
+            level = lv;
+        }
+
+        var j = i + 2;
+        var memberWord = j;
+        if (IdmsNamedForms.Contains(Word(j)) && j + 1 < words.Count && words[j + 1].Kind == TextWordKind.Word && !IdmsClauseWords.Contains(Word(j + 1)))
+        {
+            memberWord = ++j;
+        }
+
+        j++;
+        string? redefines = null;
+        while (j + 1 < words.Count && words[j].Kind == TextWordKind.Word && IdmsClauseWords.Contains(Word(j)))
+        {
+            if (ReplacingParser.Is(text, words[j], "REDEFINES"))
+            {
+                redefines = Word(j + 1);
+            }
+
+            j += ReplacingParser.Is(text, words[j], "SIZE") && ReplacingParser.Is(text, words[j + 1], "IS") ? 3 : 2;
+        }
+
+        var period = j < words.Count && words[j].Kind == TextWordKind.Period;
+        var last = Math.Min(period ? j : j - 1, words.Count - 1);
+        var member = Word(memberWord);
+        var header = level is { } l ? RecordHeader(unit, member, l, redefines, unit.Source.RangeOf(words[i].Start, words[last].End)) : null;
+
+        // A synthesized header keeps the level number as real text, so only COPY IDMS ... is the directive.
+        var start = level is not null && header is null ? words[i - 1].Start : words[i].Start;
+        output.Append(source, cursor, start);
+        if (!period)
+        {
+            _diagnostics.Add(Diagnostic.Create("copy-period-expected", DiagnosticSeverity.Warning, "COPY IDMS statement must end with a separator period", unit.Source.RangeOf(start, words[last].End), string.Empty));
+        }
+
+        Include(unit, output, CopyStatementKind.Copy, start, words[last].End, member, null, false, Array.Empty<ReplacingPair>(), idms: true, prefix: header);
+        cursor = words[last].End;
+        return last;
+    }
+
+    // "If you specify a level number, the first level of code is copied to the specified level. All other levels
+    // adjust accordingly." Dictionary record descriptions start with the record's own 01 entry. When the estate
+    // copybook holds only the record's fields, the record entry is rebuilt from the level and record name written in
+    // the COPY IDMS statement itself; level shifting of a copybook that already has its record entry is not done.
+    private string? RecordHeader(SourceUnit unit, string member, int level, string? redefines, SourceRange range)
+    {
+        var resolution = _resolver.Resolve(CopybookResolver.NormalizeName(member), null, unit.Path, _programPath);
+        if (!resolution.Found)
+        {
+            return null;
+        }
+
+        string body;
+        try
+        {
+            body = _cache.GetCopybook(resolution.Path!, _options.DebuggingMode).Text;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+
+        var head = TextWordScanner.Scan(body, 0, Math.Min(body.Length, 512));
+        if (head.Count == 0 || head[0].Kind != TextWordKind.Word || !body.Substring(head[0].Start, head[0].Length).All(char.IsAsciiDigit))
+        {
+            return null;
+        }
+
+        var first = int.Parse(body.Substring(head[0].Start, head[0].Length));
+        var hasRecordEntry = head.Count > 1 && string.Equals(body.Substring(head[1].Start, head[1].Length), member, StringComparison.OrdinalIgnoreCase);
+        if (!hasRecordEntry && first > level)
+        {
+            return $" {member.ToUpperInvariant()}{(redefines is null ? string.Empty : $" REDEFINES {redefines.ToUpperInvariant()}")}.";
+        }
+
+        if (first != level || redefines is not null)
+        {
+            _diagnostics.Add(Diagnostic.Create("copy-idms-level-unsupported", DiagnosticSeverity.Warning,
+                $"COPY IDMS {member.ToUpperInvariant()} asks for level {level:00}{(redefines is null ? string.Empty : $" REDEFINES {redefines.ToUpperInvariant()}")}; the copybook is included with its own levels", range, member.ToUpperInvariant()));
+        }
+
+        return null;
+    }
+
+    private void Include(SourceUnit parent, OriginTextBuilder output, CopyStatementKind kind, int start, int end, string rawName, string? library, bool suppress, IReadOnlyList<ReplacingPair> pairs, bool idms = false, string? prefix = null)
     {
         var range = parent.Source.RangeOf(start, end);
         var name = CopybookResolver.NormalizeName(rawName);
@@ -182,7 +293,7 @@ internal sealed class CopyExpander
         {
             _diagnostics.Add(Diagnostic.Create(code, DiagnosticSeverity.Error, message, range, label));
             _accounting.Mark(parent.Id, start, end, CoverageClass.Unresolved, $"{code}:{label}");
-            _inclusions.Add(new CopyInclusion(kind, name, library, suppress, pairs.Count, parent.Id, -1, range, status, resolution.Path, resolution.Stage, resolution.OtherCandidates));
+            _inclusions.Add(new CopyInclusion(kind, name, library, suppress, pairs.Count, parent.Id, -1, range, status, resolution.Path, resolution.Stage, resolution.OtherCandidates, idms));
         }
 
         if (!resolution.Found)
@@ -219,7 +330,12 @@ internal sealed class CopyExpander
         var child = new SourceUnit(_accounting.Units.Count, kind == CopyStatementKind.Copy ? SourceUnitKind.Copybook : SourceUnitKind.SqlInclude, childSource, parent.Id, name, library, range, parent.Depth + 1, pairs.Count > 0);
         _accounting.Register(child);
         _diagnostics.AddRange(childSource.Diagnostics);
-        _inclusions.Add(new CopyInclusion(kind, name, library, suppress, pairs.Count, parent.Id, child.Id, range, CopyStatus.Resolved, resolution.Path, resolution.Stage, resolution.OtherCandidates));
+        _inclusions.Add(new CopyInclusion(kind, name, library, suppress, pairs.Count, parent.Id, child.Id, range, CopyStatus.Resolved, resolution.Path, resolution.Stage, resolution.OtherCandidates, idms));
+
+        if (prefix is not null)
+        {
+            output.AppendSynthetic(prefix);
+        }
 
         if (!char.IsWhiteSpace(output.LastChar))
         {

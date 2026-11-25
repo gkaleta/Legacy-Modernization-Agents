@@ -539,7 +539,7 @@ public sealed class RektEstateReader
     }
 
     internal static readonly System.Text.RegularExpressions.Regex CopyStatementRegex = new(
-        @"^\s*COPY\s+([A-Z0-9$@#\-_]+)",
+        @"^\s*COPY\s+" + CobolToQuarkusMigration.Helpers.CopyStatementSyntax.IdmsPrefix + @"([A-Z0-9$@#\-_]+)",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase
         | System.Text.RegularExpressions.RegexOptions.Multiline
         | System.Text.RegularExpressions.RegexOptions.Compiled);

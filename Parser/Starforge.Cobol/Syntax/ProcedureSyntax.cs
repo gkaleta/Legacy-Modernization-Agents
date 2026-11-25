@@ -84,6 +84,9 @@ public sealed record AndCondition(NodeSpan Span, Condition Left, Condition Right
 
 public sealed record OrCondition(NodeSpan Span, Condition Left, Condition Right) : Condition(Span);
 
+// IDMS DML set test: "set IS [NOT] EMPTY" or "set MEMBER" (a leading NOT wraps it in a NotCondition).
+public sealed record IdmsSetCondition(NodeSpan Span, string Set, bool Empty, bool Not) : Condition(Span);
+
 // A procedure name as written (Qualifier is the OF/IN section); Line is the program-file line of the reference.
 public sealed record ProcedureRef(NodeSpan Span, string Name, string? Qualifier, int Line)
 {
@@ -116,6 +119,7 @@ public abstract record Statement(NodeSpan Span, SourceRange Range) : SyntaxNode(
             EvaluateStatement s => s.Whens.SelectMany(w => w.Statements).Concat(s.Other ?? Array.Empty<Statement>()),
             PerformStatement s => s.Inline ?? Array.Empty<Statement>(),
             SearchStatement s => (s.AtEnd ?? Array.Empty<Statement>()).Concat(s.Whens.SelectMany(w => w.Statements)),
+            IdmsStatement s => s.On?.Statements ?? Array.Empty<Statement>(),
             _ => handlers,
         };
     }
@@ -343,6 +347,30 @@ public sealed record SortStatement(
 public sealed record EntryStatement(NodeSpan Span, SourceRange Range, string Name, IReadOnlyList<CallArgument> Using) : Statement(Span, Range);
 
 // EXEC ... END-EXEC in the procedure body; Parsed is the shared Starforge.Cobol.Exec result for the block token.
+public enum IdmsKind
+{
+    Generic,
+    BindRunUnit,
+    Finish,
+    Transfer,
+    DcReturn,
+}
+
+// TRANSFER CONTROL: Target is the quoted program name or the field holding it; Mode is RETURN or NORETURN (LINK/XCTL
+// are synonyms). DC RETURN NEXT TASK CODE: Target is the task code and Mode is "NEXT TASK".
+public sealed record IdmsTransfer(string Target, bool IsLiteral, string Mode);
+
+// "ON condition-name imperative-statement": runs when the DML command returns that status.
+public sealed record IdmsOnClause(NodeSpan Span, string Condition, IReadOnlyList<Statement> Statements);
+
+// An IDMS DML command written for the precompiler. Form is the verb phrase (for example "OBTAIN" or "GET QUEUE"),
+// Command covers the command without its ON clause. Operands are the words after the statement name that may name data
+// (the DBMS may store into any of them); the TRANSFER target and DC RETURN task code are read and are not operands.
+public sealed record IdmsStatement(
+    NodeSpan Span, SourceRange Range, string Form, IdmsKind Kind, NodeSpan Command, IdmsTransfer? Transfer, IdmsTransfer? NextTask,
+    IReadOnlyList<string> Operands, IdmsOnClause? On)
+    : Statement(Span, Range);
+
 public sealed record ExecStatementSyntax(NodeSpan Span, SourceRange Range, ExecKind Kind, Exec.ExecStatement Parsed) : Statement(Span, Range);
 
 public sealed record Sentence(NodeSpan Span, IReadOnlyList<Statement> Statements);

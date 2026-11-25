@@ -70,6 +70,25 @@ public static class DependencyExtractor
                         break;
                     }
 
+                    case IdmsStatement { Transfer: { } transfer }:
+                    {
+                        presence["CALL"]++;
+                        var value = transfer.IsLiteral ? transfer.Target : resolver.ValueOf(transfer.Target);
+                        var from = transfer.IsLiteral || value is null ? null : transfer.Target;
+                        calls.Add(new ProgramReference(DependencyKind.IdmsTransfer, value ?? transfer.Target, value is not null, from, line));
+                        transfers.Add(new ControlTransfer("TRANSFER " + transfer.Mode, value ?? transfer.Target, value is not null, from, line));
+                        break;
+                    }
+
+                    case IdmsStatement { Kind: IdmsKind.DcReturn } dc:
+                    {
+                        var task = dc.NextTask;
+                        var value = task is null ? null : task.IsLiteral ? task.Target : resolver.ValueOf(task.Target);
+                        transfers.Add(new ControlTransfer("DC RETURN", value ?? task?.Target, task is null || value is not null,
+                            task is null || task.IsLiteral || value is null ? null : task.Target, line));
+                        break;
+                    }
+
                     case OpenStatement open:
                         presence["FILE_IO"]++;
                         foreach (var f in open.Files)
@@ -294,6 +313,15 @@ internal sealed class ConstantResolver
             if (!programTargets.Contains(reference) && reads?.Contains(reference) != true)
             {
                 Touch(bindings.ItemOf(reference) is { } item ? new[] { item } : Lookup(reference.Name.Name, reference.Name.Qualifiers));
+            }
+        }
+
+        // IDMS DML operands are not data references, but the DBMS may store into any data item a DML statement names.
+        foreach (var dml in statements.OfType<IdmsStatement>())
+        {
+            foreach (var operand in dml.Operands)
+            {
+                Touch(Lookup(operand, null));
             }
         }
 

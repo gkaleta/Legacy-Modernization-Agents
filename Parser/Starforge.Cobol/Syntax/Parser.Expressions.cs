@@ -527,6 +527,11 @@ internal sealed partial class Parser
             return new RelationCondition(SpanFrom(first), _impliedSubject, op, right, Abbreviated: true);
         }
 
+        if (_idms && IdmsSetTest(_pos) is { } test)
+        {
+            return test;
+        }
+
         var subject = ParseExpression();
         return ParseConditionTail(first, subject, afterLogical);
     }

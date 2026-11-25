@@ -52,4 +52,5 @@ public sealed record CopyInclusion(
     CopyStatus Status,
     string? ResolvedPath,
     string? SearchStage,
-    IReadOnlyList<string> OtherCandidates);
+    IReadOnlyList<string> OtherCandidates,
+    bool Idms = false);

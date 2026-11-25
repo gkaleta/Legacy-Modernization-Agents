@@ -4,7 +4,8 @@ using Starforge.Cobol.Source;
 
 namespace Starforge.Cobol.Syntax;
 
-public sealed record ParserOptions(bool DecimalPointIsComma = false);
+// Idms: the program uses the IDMS DML precompiler (a COPY IDMS was expanded), so DML statements are recognized.
+public sealed record ParserOptions(bool DecimalPointIsComma = false, bool Idms = false);
 
 // ParsedExecs: EXEC blocks the procedure parser already parsed, by token index, so ExecPass need not re-parse them.
 public sealed record ParseResult(CompilationUnitSyntax Syntax, IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyDictionary<int, Exec.ExecStatement> ParsedExecs);
@@ -40,6 +41,7 @@ internal sealed partial class Parser
         _ts = tokens;
         _marks = new byte[tokens.Count];
         _decimalPointIsComma = options.DecimalPointIsComma;
+        _idmsOption = options.Idms;
     }
 
     public List<Diagnostic> Diagnostics { get; } = new();

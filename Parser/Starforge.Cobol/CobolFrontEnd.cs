@@ -139,7 +139,7 @@ public sealed class CobolFrontEnd
         diagnostics.AddRange(lex.Diagnostics);
         MarkTokens(lex.Tokens, accounting);
 
-        var parse = CobolParser.Parse(lex.Tokens, new ParserOptions(comma), accounting);
+        var parse = CobolParser.Parse(lex.Tokens, new ParserOptions(comma, inclusions.Any(i => i.Idms)), accounting);
         diagnostics.AddRange(parse.Diagnostics);
         var programs = DataLayout.Compute(parse.Syntax, accounting.Units);
         diagnostics.AddRange(programs.SelectMany(p => p.Diagnostics));

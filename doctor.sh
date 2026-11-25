@@ -3312,8 +3312,18 @@ rekt_programs_in_estate() {
     return 0
 }
 
+# REKT only parses IDMS DML when told the dialect; COPY IDMS or an IDMS-CONTROL section marks an IDMS program.
+rekt_dialect_for() {
+    if grep -Ev '^.{6}[*/]' "$1" 2>/dev/null \
+        | grep -Eiq '(^|[[:space:]])COPY[[:space:]]+IDMS[[:space:].]|IDMS-CONTROL[[:space:]]+SECTION'; then
+        echo IDMS
+    else
+        echo COBOL
+    fi
+}
+
 export_rekt_dependencies() {
-    local rel_program="$1" err_log="$2" work_dir="$3"
+    local rel_program="$1" err_log="$2" work_dir="$3" dialect="${4:-COBOL}"
     local export_status=0
     local estate
     estate="$(rekt_estate_of "$rel_program")"
@@ -3347,7 +3357,7 @@ export_rekt_dependencies() {
         [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies: $rel_program"
         run_rekt_logged "$err_log" container_exec "${resource_environment[@]}" -w "$work_dir" "$REKT_CONTAINER" java -jar /app/smojol-cli.jar dependency "$(basename "$rel_program")" \
             --srcDir="$dependency_src_dir" --copyBooksDir="/source/.rekt-staging/$estate" \
-            --dialectJarPath=/app/dialect-idms.jar \
+            --dialectJarPath=/app/dialect-idms.jar --dialect="$dialect" \
             --export="/output/${rel_program}-deps.json" || export_status=$?
     else
         export_status=24
@@ -4111,6 +4121,8 @@ run_rekt_parse_impl() {
         if [[ "${REKT_PLATFORM_CONTRACTS+x}" == x ]]; then
             platform_environment=(-e "REKT_PLATFORM_CONTRACTS=$(rekt_platform_contracts_for "$estate" container)")
         fi
+        local rekt_dialect
+        rekt_dialect="$(rekt_dialect_for "$cbl_file")"
         local stub_warnings=""
         if [[ -s "$generated_stubs_file" ]]; then
             stub_warnings=$(lma_cli doctor-report stub-warnings "$cbl_file" "$generated_stubs_file")
@@ -4126,7 +4138,7 @@ run_rekt_parse_impl() {
         elif run_rekt_logged "$err_log" container_exec "${platform_environment[@]}" "$REKT_CONTAINER" env REKT_ALLOW_MISSING_COPYBOOKS=true java -jar /app/smojol-cli.jar run "$fname" \
             --commands="BUILD_BASE_ANALYSIS WRITE_FLOW_AST WRITE_CFG WRITE_DATA_STRUCTURES" \
             --srcDir="$parser_src_dir" --copyBooksDir="$parser_copybooks_dir" \
-            --dialectJarPath=/app/dialect-idms.jar \
+            --dialectJarPath=/app/dialect-idms.jar --dialect="$rekt_dialect" \
             --reportDir="/output/$report_work_rel" \
             --generation=PROGRAM && rekt_structure_written "$report_work_rel/$fname"; then
             parse_outcome="Full"
@@ -4150,7 +4162,7 @@ run_rekt_parse_impl() {
                     # Also try validate (may report warnings but still useful)
                     run_rekt_logged "$err_log" container_exec "$REKT_CONTAINER" java -jar /app/smojol-cli.jar validate "$fname" \
                         --srcDir="$parser_src_dir" --copyBooksDir="$parser_copybooks_dir" \
-                        --dialectJarPath=/app/dialect-idms.jar || true
+                        --dialectJarPath=/app/dialect-idms.jar --dialect="$rekt_dialect" || true
                 fi
             fi
         fi
@@ -4164,7 +4176,7 @@ run_rekt_parse_impl() {
         local dep_ok=false
         if [[ "$PARSER_ENGINE" == starforge ]]; then
             starforge_export_dependencies "$rel_program" "$err_log" && dep_ok=true
-        elif export_rekt_dependencies "$rel_program" "$err_log" "/output/$report_work_rel"; then
+        elif export_rekt_dependencies "$rel_program" "$err_log" "/output/$report_work_rel" "$rekt_dialect"; then
             dep_ok=true
         fi
         if [[ "$parse_outcome" == "Failed" ]]; then

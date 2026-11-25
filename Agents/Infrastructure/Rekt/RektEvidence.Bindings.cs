@@ -110,7 +110,7 @@ public static partial class RektEvidence
             if (ReferenceEquals(node, document)) continue;
             var target = Has(node, "callTarget") ? Get(node, "callTarget") : node;
             var kindNode = Get(node, "dependencyKind");
-            var kind = PyJson.Str(kindNode) is "CICS_LINK" or "CICS_RUN" ? "CALL" : PyJson.Str(kindNode);
+            var kind = PyJson.Str(kindNode) is "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER" ? "CALL" : PyJson.Str(kindNode);
             var name = PyJson.Str(Subscript(target, "name"))!;
             if (kind == "PLATFORM_COPY")
             {
@@ -314,7 +314,7 @@ public static partial class RektEvidence
             var continuation = ContinuationRules.Contains(StatementRule(statement));
             if (!IsRelativeTo(programPath, scope.SourceRoot)
                 || DigestDiffers(programPath, binding, "programSourceSha256")
-                || !continuation && !Items(node, "dependencies").Any(child => Str(child, "dependencyKind") is "CALL" or "CICS_LINK" or "CICS_RUN"
+                || !continuation && !Items(node, "dependencies").Any(child => Str(child, "dependencyKind") is "CALL" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER"
                     && PyJson.PyEquals(Get(GetOr(child, "callTarget", new JsonObject()), "name"), Subscript(binding, "name"))
                     && PyJson.PyEquals(Get(child, "sourcePath"), Subscript(binding, "programSourcePath"))
                     && PyJson.PyEquals(Get(child, "sourceSha256"), Subscript(binding, "programSourceSha256"))))

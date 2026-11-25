@@ -98,6 +98,7 @@ public static class NativeExporter
             var statements = new JsonArray();
             var children = new List<JsonObject>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            var idmsTransfers = new List<JsonObject>();
 
             foreach (var copy in Copies(result, roots, data, diagnostics))
             {
@@ -162,6 +163,26 @@ public static class NativeExporter
                             }
 
                             break;
+                        case IdmsStatement { Transfer: { } transfer } dml:
+                            idmsTransfers.Add(IdmsTransfer(dml, roots));
+                            if (!transfer.IsLiteral)
+                            {
+                                diagnostics.Add($"dynamic-transfer-unsupported:{transfer.Target}");
+                            }
+                            else if (Source(transfer.Target) is null)
+                            {
+                                diagnostics.Add($"transfer-target-unresolved:{transfer.Target.ToUpperInvariant()}");
+                            }
+                            else if (seen.Add("IDMS_TRANSFER:" + transfer.Target.ToUpperInvariant())
+                                && Link(transfer.Target.ToUpperInvariant(), "IDMS_TRANSFER", active, diagnostics) is { } transferred)
+                            {
+                                children.Add(transferred);
+                            }
+
+                            break;
+                        case IdmsStatement { Kind: IdmsKind.DcReturn } dml:
+                            idmsTransfers.Add(IdmsTransfer(dml, roots));
+                            break;
                         case ExecStatementSyntax { Kind: ExecKind.Sql or ExecKind.SqlIms }:
                             break;
                         case ExecStatementSyntax exec:
@@ -174,11 +195,12 @@ public static class NativeExporter
             var inventory = cics.Inventory();
             diagnostics.AddRange(roots.Problems);
             active.Remove(path);
-            return Document(path, name, kind, children, statements, inventory, diagnostics.Distinct(StringComparer.Ordinal).ToList(), fileIo);
+            return Document(path, name, kind, children, statements, inventory, diagnostics.Distinct(StringComparer.Ordinal).ToList(), fileIo, idmsTransfers);
         }
 
         private JsonObject Document(
-            string path, string name, string kind, List<JsonObject> children, JsonArray statements, JsonObject inventory, List<string> diagnostics, bool fileIo)
+            string path, string name, string kind, List<JsonObject> children, JsonArray statements, JsonObject inventory, List<string> diagnostics, bool fileIo,
+            List<JsonObject> idmsTransfers)
         {
             var list = statements.OfType<JsonObject>().ToList();
             var presence = new JsonObject();
@@ -246,7 +268,7 @@ public static class NativeExporter
                 ["dependencyProducer"] = Producer,
                 ["dependencyCoverage"] = coverage,
                 ["dependencyDiagnostics"] = new JsonArray(diagnostics.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
-                ["dependencyControlTransfers"] = ControlTransfers(cics),
+                ["dependencyControlTransfers"] = new JsonArray(ControlTransfers(cics).Select(t => t!.DeepClone()).Concat(idmsTransfers).ToArray()),
                 ["dependencyDialectStatements"] = statements,
                 ["commareaInventory"] = inventory,
                 ["dependencyDerivedInputs"] = DerivedInputs(children),
@@ -293,6 +315,40 @@ public static class NativeExporter
                 ["runtimeMapping"] = "unverified",
             })
             .ToArray());
+
+        // IDMS-DC: TRANSFER CONTROL ... RETURN (LINK) runs the target and comes back; NORETURN (XCTL, the default) and
+        // DC RETURN end the program, DC RETURN NEXT TASK CODE names the task IDMS-DC starts next.
+        private static JsonObject IdmsTransfer(IdmsStatement dml, SyntaxRoots roots)
+        {
+            var tokens = roots.Tokens;
+            var (line, column) = roots.Position(tokens[dml.Span.FirstToken].Start);
+            var words = Enumerable.Range(dml.Command.FirstToken, dml.Command.EndToken - dml.Command.FirstToken).Select(tokens.Text);
+            var target = dml.Transfer ?? dml.NextTask;
+            var entry = new JsonObject
+            {
+                ["kind"] = "IDMS_DC",
+                ["operation"] = dml.Kind == IdmsKind.DcReturn ? "DC RETURN" : "TRANSFER CONTROL",
+                ["variant"] = dml.Transfer?.Mode ?? (dml.NextTask is null ? "bare" : "next-task"),
+                ["controlEffect"] = dml.Kind == IdmsKind.DcReturn ? "return-to-idms-dc" : dml.Transfer!.Mode == "RETURN" ? "link-and-return" : "transfer-no-return",
+                ["sourceText"] = string.Join(' ', words),
+                ["coordinateSpace"] = "expanded-parser-input",
+                ["line"] = line.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["column"] = column.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["runtimeMapping"] = "unverified",
+            };
+            if (target is not null)
+            {
+                entry["target"] = target.Target;
+                entry["programReferenceType"] = target.IsLiteral ? "STATIC" : "DYNAMIC";
+            }
+
+            if (dml.On is not null)
+            {
+                entry["onClause"] = dml.On.Condition;
+            }
+
+            return entry;
+        }
 
         private static bool BareReturn(JsonObject statement) =>
             (string?)statement["operation"] == "RETURN" && statement["syntax"]?["children"] is JsonArray { Count: 1 } children

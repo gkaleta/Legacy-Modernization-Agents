@@ -244,6 +244,9 @@ internal sealed class ReachingDefinitions
             }
             case ExecStatementSyntax { Parsed: CicsCommand cics } when Terminates(cics):
                 return null;
+            case IdmsStatement { On: null, Kind: IdmsKind.DcReturn }:
+            case IdmsStatement { On: null, Transfer.Mode: "NORETURN" }:
+                return null;
         }
 
         var after = Writes(statement) ? Define(statement) : state;
@@ -251,6 +254,12 @@ internal sealed class ReachingDefinitions
         if (handlers.Count == 0)
         {
             return after;
+        }
+
+        // The ON clause runs after the command when its status is set, otherwise control falls through.
+        if (statement is IdmsStatement { On: { } on })
+        {
+            return Join(after, Block(on.Statements, after));
         }
 
         // A handler phrase runs instead of falling through, so either path may reach the next statement.

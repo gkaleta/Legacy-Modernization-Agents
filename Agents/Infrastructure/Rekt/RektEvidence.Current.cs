@@ -209,7 +209,7 @@ public static partial class RektEvidence
                 StrEquals(Subscript(definition, "kind"), transfer ? "CICS_CONTINUATION" : "CALL")
                 && PyJson.PyEquals(Subscript(definition, "name"), Get(binding, "name"))
                 && PyJson.PyEquals(Subscript(definition, "sha256"), Get(binding, "programSourceSha256")))
-            && (transfer || Items(node, "dependencies").Any(child => Str(child, "dependencyKind") is "CALL" or "CICS_LINK" or "CICS_RUN"
+            && (transfer || Items(node, "dependencies").Any(child => Str(child, "dependencyKind") is "CALL" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER"
                 && PyJson.PyEquals(Get(GetOr(child, "callTarget", new JsonObject()), "name"), Get(binding, "name"))
                 && PyJson.PyEquals(Get(child, "sourcePath"), Get(binding, "programSourcePath"))
                 && PyJson.PyEquals(Get(child, "sourceSha256"), Get(binding, "programSourceSha256")))));

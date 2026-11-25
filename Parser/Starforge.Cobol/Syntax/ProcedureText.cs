@@ -148,6 +148,9 @@ public static class ProcedureText
                 Append(sb, a.Right);
                 sb.Append(')');
                 break;
+            case IdmsSetCondition d:
+                sb.Append(d.Set).Append(d.Empty ? (d.Not ? " IS NOT EMPTY" : " IS EMPTY") : " MEMBER");
+                break;
             case OrCondition o:
                 sb.Append('(');
                 Append(sb, o.Left);

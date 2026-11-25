@@ -580,7 +580,7 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
             var kind = node.TryGetProperty("dependencyKind", out var kindNode)
                 ? kindNode.ValueKind == JsonValueKind.String ? kindNode.GetString() : null
                 : Path.GetExtension(name).ToLowerInvariant() is ".cpy" or ".cpb" ? "COPY" : "CALL";
-            if (kind is "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN") kind = "CALL";
+            if (kind is "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER") kind = "CALL";
             if (kind is not ("COPY" or "CALL")
                 || kind == "CALL" && target.TryGetProperty("programReferenceType", out var referenceType)
                 && referenceType.ToString().Contains("DYNAMIC", StringComparison.OrdinalIgnoreCase))
@@ -681,10 +681,10 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
                 var kind = node.TryGetProperty("dependencyKind", out var kindNode)
                     ? kindNode.GetString()
                     : Path.GetExtension(name).ToLowerInvariant() is ".cpy" or ".cpb" ? "COPY" : "CALL";
-                if (kind is not ("COPY" or "CALL" or "EXTERNAL_CONTROL" or "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" or "PLATFORM_COPY"))
+                if (kind is not ("COPY" or "CALL" or "EXTERNAL_CONTROL" or "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER" or "PLATFORM_COPY"))
                     throw new InvalidDataException($"unsupported explicit dependency kind {kind} for {name}.");
                 if (target.TryGetProperty("programReferenceType", out var referenceType)
-                    && kind is "CALL" or "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN"
+                    && kind is "CALL" or "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER"
                     && referenceType.ToString().Contains("DYNAMIC", StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException($"unresolved dynamic CALL {name}; no target was invented.");
                 if (kind == "EXTERNAL_RUNTIME")
@@ -707,7 +707,7 @@ public sealed partial class DependencyEvidenceGate(string factsDirectory)
                     runtimeRequirements.Add(ReadPlatformCopy(node, owner, name));
                 if (kind is not ("EXTERNAL_CONTROL" or "PLATFORM_COPY"))
                 {
-                    var edgeKind = kind is "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" ? "CALL" : kind;
+                    var edgeKind = kind is "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER" ? "CALL" : kind;
                     supporting.Add((edgeKind, name));
                     if (depth == 1) direct.Add((edgeKind, name));
                 }

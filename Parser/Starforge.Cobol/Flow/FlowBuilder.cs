@@ -246,6 +246,10 @@ public static class FlowBuilder
                     break;
                 }
 
+                case IdmsStatement dml:
+                    AddIdms(parent, dml, start);
+                    break;
+
                 case NextSentenceStatement:
                     _nextSentences.Add(Node(parent, "NEXT_SENTENCE", "NEXT SENTENCE", text, start, end, s));
                     break;
@@ -259,6 +263,45 @@ public static class FlowBuilder
                     break;
                 }
             }
+        }
+
+        // REKT's IDMS vocabulary: BIND RUN-UNIT and FINISH open and close the transaction; other DML is a DIALECT node
+        // around one ATOMIC (or TRANSFER) child. The ON clause follows as a decision whose action holds its statements.
+        private void AddIdms(FlowNode parent, IdmsStatement dml, int start)
+        {
+            var command = Text(dml.Command);
+            var end = EndLine(dml.Command);
+            FlowNode node;
+            switch (dml.Kind)
+            {
+                case IdmsKind.BindRunUnit:
+                    node = Node(parent, "BIND_RUN_UNIT", dml.Form, command, start, end, dml);
+                    break;
+                case IdmsKind.Finish:
+                    node = Node(parent, "FINISH", dml.Form, command, start, end, dml);
+                    break;
+                default:
+                    node = Node(parent, "DIALECT", "IDMS " + dml.Form, command, start, end, dml);
+                    if (dml.Transfer is { } transfer)
+                    {
+                        Node(node, "TRANSFER", transfer.Target, command, start, end, target: transfer.Target, dynamic: !transfer.IsLiteral);
+                    }
+                    else
+                    {
+                        Node(node, "ATOMIC", dml.Form, command, start, end);
+                    }
+
+                    break;
+            }
+
+            if (dml.On is { } on)
+            {
+                var clause = Node(parent, "ON_CLAUSE", "ON " + on.Condition, Text(on.Span), StartLine(on.Span), EndLine(on.Span));
+                Branch(clause, "ON_CLAUSE_ACTION", on.Condition, on.Statements);
+                return;
+            }
+
+            node.Terminates = dml.Kind == IdmsKind.DcReturn || dml.Transfer is { Mode: "NORETURN" };
         }
 
         private void Branch(FlowNode parent, string type, string name, IReadOnlyList<Statement> statements)
@@ -390,7 +433,7 @@ public static class FlowBuilder
         }
 
         private static bool IsBranching(FlowNode node)
-            => node.Type is "IF_BRANCH" or "EVALUATE" or "SEARCH" or "DIALECT"
+            => node.Type is "IF_BRANCH" or "EVALUATE" or "SEARCH" or "DIALECT" or "ON_CLAUSE"
                 || (node.Statement is not null && node.Type != "PERFORM");
 
         private static void MarkTerminators(FlowNode root)

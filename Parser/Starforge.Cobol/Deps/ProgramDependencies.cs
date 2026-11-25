@@ -10,6 +10,7 @@ public enum DependencyKind
     CicsLink,
     CicsXctl,
     CicsRun,
+    IdmsTransfer,
 }
 
 // Name is the copybook file stem plus a lower-case ".cpy" whatever the extension on disk; platform copybooks use the bare member.
@@ -18,7 +19,8 @@ public sealed record CopybookReference(string Name, string Member, DependencyKin
 // IsStatic: the program is known at compile time, from a literal or from a data name whose VALUE never changes (ResolvedFrom).
 public sealed record ProgramReference(DependencyKind Kind, string Name, bool IsStatic, string? ResolvedFrom, int Line);
 
-// CICS RETURN, XCTL, START and RUN; Target is the program or TRANSID, null for a bare RETURN.
+// CICS RETURN, XCTL, START and RUN, IDMS "TRANSFER RETURN|NORETURN" and "DC RETURN"; Target is the program, TRANSID
+// or next task code, null for a bare RETURN.
 public sealed record ControlTransfer(string Operation, string? Target, bool IsStatic, string? ResolvedFrom, int Line);
 
 // Files, DB2 tables, queues, maps, channels, containers, COMMAREAs and PSBs a program names; Operation is the verb.

@@ -165,6 +165,10 @@ public static class RektEmitter
         "COMPUTE" or "ADD" or "SUBTRACT" or "MULTIPLY" or "DIVIDE" => new[] { "COMPUTATIONAL", "DATA_FLOW" },
         "DIALECT" => new[] { "DIALECT" },
         "DIALECT_CONTAINER" => new[] { "TRANSACTION" },
+        "BIND_RUN_UNIT" => new[] { "TRANSACTION_START", "TRANSACTION" },
+        "FINISH" => new[] { "TRANSACTION_END", "TRANSACTION" },
+        "ON_CLAUSE" => new[] { "DECISION" },
+        "TRANSFER" => new[] { "CONTROL_FLOW" },
         "IF_BRANCH" or "EVALUATE" => new[] { "DECISION" },
         "IF_YES" or "IF_NO" or "WHEN" or "WHEN_OTHER" or "HANDLER" => new[] { "DECISION_BRANCH" },
         "PERFORM" when node.Conditional => new[] { "LOOP" },
@@ -357,6 +361,7 @@ public static class RektEmitter
             {
                 DependencyKind.CicsLink => "CICS_LINK",
                 DependencyKind.CicsRun => "CICS_RUN",
+                DependencyKind.IdmsTransfer => "IDMS_TRANSFER",
                 _ => "CALL",
             };
             if (seen.Add((kind, p.Name.ToUpperInvariant(), p.IsStatic)))

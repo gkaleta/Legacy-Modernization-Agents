@@ -434,6 +434,7 @@ Values load in the order `appsettings.json` → `ai-config.local.env` → enviro
 | [Source decoding and generated output ownership](docs/source-reading-and-output-ownership.md) | Source encoding policy and per-target-path ownership of generated files |
 | [JCL job facts](docs/jcl-job-facts.md) | Deterministic JCL parser: procedures, symbols, conditions, Db2 runs and dataset lineage across jobs |
 | [Jobs generated from JCL](docs/jcl-jobs.md) | Each JCL job as a .NET job (C#) or Spring Batch job (Java) that runs the converted programs under the JCL's conditions |
+| [CA IDMS programs](docs/idms-dialect.md) | What Starforge reads in IDMS programs, the dictionary copybooks you must supply, and how REKT is called for them |
 | [Bundled system copybooks](docs/bundled-system-copybooks.md) | SQLCA/SQLDA parser inputs supplied when the source has none, with provenance |
 | [Explicit platform replacement contracts](docs/platform-replacement-contracts.md) | Replacing a platform service explicitly, without redistributing its SDK copybooks |
 | [Bank-of-Z source corrections](docs/bank-of-z-source-corrections.md) | Corrections applied to the Bank-of-Z demonstration estate |

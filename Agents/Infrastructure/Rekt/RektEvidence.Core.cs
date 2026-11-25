@@ -380,7 +380,7 @@ public static partial class RektEvidence
                 || PyCompat.Suffix(name).ToLowerInvariant() is ".cpy" or ".cpb")
                 copies.Add(PyCompat.Stem(name).ToUpperInvariant());
             else if (!StrEquals(Get(target, "programReferenceType"), "DYNAMIC")
-                && PyJson.Str(kind) is "CALL" or "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN")
+                && PyJson.Str(kind) is "CALL" or "EXTERNAL_RUNTIME" or "CICS_LINK" or "CICS_RUN" or "IDMS_TRANSFER")
                 calls.Add(name.ToUpperInvariant());
         }
         return (copies, calls);

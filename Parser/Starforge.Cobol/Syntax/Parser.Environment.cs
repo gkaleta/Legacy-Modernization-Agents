@@ -40,9 +40,17 @@ internal sealed partial class Parser
         var files = new List<FileControlEntry>();
         var ioControl = new List<IoControlEntry>();
         var paragraph = string.Empty;
+        IdmsControlSection? idms = null;
 
         while (!AtEnd && !IsDivisionHeader(_pos) && !IsEndProgram(_pos))
         {
+            if (IsWord(_pos, "IDMS-CONTROL") && IsWord(_pos + 1, "SECTION"))
+            {
+                idms = ParseIdmsControl();
+                paragraph = string.Empty;
+                continue;
+            }
+
             if (IsWord(_pos, "CONFIGURATION") && IsWord(_pos + 1, "SECTION"))
             {
                 configFirst ??= _pos;
@@ -148,7 +156,71 @@ internal sealed partial class Parser
         }
 
         var span = SpanFrom(first);
-        return new EnvironmentDivision(span, RangeOf(span), config, io, errors);
+        return new EnvironmentDivision(span, RangeOf(span), config, io, errors, idms);
+    }
+
+    // Broadcom, DML Reference for COBOL, Precompiler-Directive Statements, ENVIRONMENT DIVISION.
+    private IdmsControlSection ParseIdmsControl()
+    {
+        var first = _pos;
+        Next();
+        Next();
+        ExpectPeriod("IDMS-CONTROL SECTION");
+        string? mode = null;
+        string? records = null;
+        var debug = false;
+        if (AcceptWord("PROTOCOL"))
+        {
+            AcceptPeriod();
+            while (!AtEnd && !IsPeriod(_pos))
+            {
+                if (AcceptWord("MODE"))
+                {
+                    AcceptWord("IS");
+                    if (IsWordToken(_pos))
+                    {
+                        mode = Up(_pos);
+                        Next();
+                    }
+
+                    debug |= AcceptWord("DEBUG");
+                }
+                else if (AcceptWord("SUBSCHEMA-NAMES"))
+                {
+                    AcceptWord("LENGTH");
+                    AcceptWord("IS");
+                    TryInteger(out _);
+                }
+                else if (AcceptWord("IDMS-RECORDS"))
+                {
+                    if (AcceptWord("MANUAL"))
+                    {
+                        records = "MANUAL";
+                    }
+                    else if (AcceptWord("WITHIN") && IsWordToken(_pos))
+                    {
+                        records = Up(_pos);
+                        Next();
+                        AcceptWord("SECTION");
+                        if (AcceptWord("LEVELS"))
+                        {
+                            AcceptWord("INCREMENTED");
+                            AcceptWord("BY");
+                            TryInteger(out _);
+                        }
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            ExpectPeriod("PROTOCOL");
+        }
+
+        var span = SpanFrom(first);
+        return new IdmsControlSection(span, RangeOf(span), mode, debug, records);
     }
 
     private bool EnvironmentBoundary(int i)

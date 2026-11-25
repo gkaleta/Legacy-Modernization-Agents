@@ -15,13 +15,21 @@ public sealed record DataDivision(
     NodeSpan Span,
     SourceRange Range,
     IReadOnlyList<DataSection> Sections,
-    IReadOnlyList<ErrorNode> Errors) : SyntaxNode(Span, Range)
+    IReadOnlyList<ErrorNode> Errors,
+    IdmsSchemaSection? IdmsSchema = null,
+    IReadOnlyList<IdmsMapDeclaration>? IdmsMaps = null) : SyntaxNode(Span, Range)
 {
     public IEnumerable<ErrorNode> AllErrors()
         => Errors.Concat(Sections.SelectMany(s => s.Errors
             .Concat(s.Files.SelectMany(f => f.Errors.Concat(f.Records.SelectMany(r => r.SelfAndDescendants()).SelectMany(e => e.Errors))))
             .Concat(s.Entries.SelectMany(r => r.SelfAndDescendants()).SelectMany(e => e.Errors))));
 }
+
+// CA IDMS SCHEMA SECTION: DB subschema WITHIN schema [VERSION n].
+public sealed record IdmsSchemaSection(NodeSpan Span, SourceRange Range, string? Subschema, string? Schema, int? Version) : SyntaxNode(Span, Range);
+
+// CA IDMS MAP SECTION entry: MAP map [VERSION n] [TYPE IS STANDARD|EXTENDED [PAGING]].
+public sealed record IdmsMapDeclaration(NodeSpan Span, SourceRange Range, string Name, int? Version, string? Type) : SyntaxNode(Span, Range);
 
 public sealed record DataSection(
     NodeSpan Span,

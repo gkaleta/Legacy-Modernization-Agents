@@ -24,6 +24,8 @@ internal sealed partial class Parser
         var first = _pos;
         var sections = new List<DataSection>();
         var errors = new List<ErrorNode>();
+        IdmsSchemaSection? schema = null;
+        var maps = new List<IdmsMapDeclaration>();
         if (hasHeader)
         {
             Next();
@@ -47,6 +49,18 @@ internal sealed partial class Parser
                     "LINKAGE" => DataSectionKind.Linkage,
                     _ => (DataSectionKind?)null,
                 };
+                if (kind is null && IsWord(_pos, "SCHEMA"))
+                {
+                    schema = ParseIdmsSchema(errors);
+                    continue;
+                }
+
+                if (kind is null && IsWord(_pos, "MAP"))
+                {
+                    ParseIdmsMaps(maps, errors);
+                    continue;
+                }
+
                 if (kind is null)
                 {
                     errors.Add(SkipError("unsupported-data-section", $"{Text(_pos).ToUpperInvariant()} SECTION is not supported", i => IsSectionHeader(i) || IsDivisionHeader(i) || IsEndProgram(i)));
@@ -66,7 +80,98 @@ internal sealed partial class Parser
         }
 
         var span = SpanFrom(first);
-        return new DataDivision(span, RangeOf(span), sections, errors);
+        return new DataDivision(span, RangeOf(span), sections, errors, schema, maps);
+    }
+
+    private bool DataSectionStop(int i) => IsSectionHeader(i) || IsDivisionHeader(i) || IsEndProgram(i);
+
+    // Broadcom, DML Reference for COBOL, Precompiler-Directive Statements, DATA DIVISION: SCHEMA SECTION.
+    private IdmsSchemaSection ParseIdmsSchema(List<ErrorNode> errors)
+    {
+        var first = _pos;
+        Next();
+        Next();
+        ExpectPeriod("SCHEMA SECTION");
+        string? subschema = null;
+        string? schemaName = null;
+        int? version = null;
+        if (AcceptWord("DB") && IsWordToken(_pos))
+        {
+            subschema = Up(_pos);
+            Next();
+            if (AcceptWord("WITHIN") && IsWordToken(_pos))
+            {
+                schemaName = Up(_pos);
+                Next();
+                if (AcceptWord("VERSION") && TryInteger(out var v))
+                {
+                    version = v;
+                }
+            }
+
+            ExpectPeriod("DB");
+        }
+
+        if (!DataSectionStop(_pos) && !AtEnd)
+        {
+            errors.Add(SkipError("unexpected-schema-section-text", "Expected DB subschema WITHIN schema in the SCHEMA SECTION", DataSectionStop));
+        }
+
+        var span = SpanFrom(first);
+        return new IdmsSchemaSection(span, RangeOf(span), subschema, schemaName, version);
+    }
+
+    // MAP SECTION. [MAX FIELD LIST IS n.] {MAP map [VERSION n] [TYPE IS {STANDARD|EXTENDED} [PAGING]].}...
+    private void ParseIdmsMaps(List<IdmsMapDeclaration> maps, List<ErrorNode> errors)
+    {
+        Next();
+        Next();
+        ExpectPeriod("MAP SECTION");
+        while (!AtEnd && !DataSectionStop(_pos))
+        {
+            var first = _pos;
+            if (AcceptWord("MAX"))
+            {
+                AcceptWord("FIELD");
+                AcceptWord("LIST");
+                AcceptWord("IS");
+                TryInteger(out _);
+                ExpectPeriod("MAX FIELD LIST");
+                continue;
+            }
+
+            if (AcceptWord("MAP") && IsWordToken(_pos))
+            {
+                var name = Up(_pos);
+                Next();
+                int? version = null;
+                string? type = null;
+                if (AcceptWord("VERSION") && TryInteger(out var v))
+                {
+                    version = v;
+                }
+
+                if (AcceptWord("TYPE"))
+                {
+                    AcceptWord("IS");
+                    if (IsWordToken(_pos))
+                    {
+                        type = Up(_pos);
+                        Next();
+                    }
+
+                    AcceptWord("PAGING");
+                }
+
+                ExpectPeriod("MAP");
+                var span = SpanFrom(first);
+                maps.Add(new IdmsMapDeclaration(span, RangeOf(span), name, version, type));
+                continue;
+            }
+
+            errors.Add(SkipError("unexpected-map-section-text", "Expected MAX FIELD LIST or MAP in the MAP SECTION", i => IsPeriod(i) || DataSectionStop(i)));
+            AcceptPeriod();
+        }
     }
 
     private DataSection ParseDataSection(DataSectionKind kind, bool hasHeader)

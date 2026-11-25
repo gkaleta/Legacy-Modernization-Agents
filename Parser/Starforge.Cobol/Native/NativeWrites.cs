@@ -22,9 +22,14 @@ internal sealed class NativeWrites
 
     public IReadOnlyList<DataRef> References => _references;
 
-    public bool Writes(Statement statement, DataItem item, Func<CicsCommand, ExecOption, bool> readOnly) => statement is ExecStatementSyntax exec
-        ? ExecWrites(exec.Parsed, item, readOnly)
-        : Written(statement).Any(reference => Overlaps(reference, item));
+    // IDMS DML operands are not bound to data items and the DBMS also fills record areas and the communications
+    // block, so a DML statement is taken to write any storage.
+    public bool Writes(Statement statement, DataItem item, Func<CicsCommand, ExecOption, bool> readOnly) => statement switch
+    {
+        ExecStatementSyntax exec => ExecWrites(exec.Parsed, item, readOnly),
+        IdmsStatement => true,
+        _ => Written(statement).Any(reference => Overlaps(reference, item)),
+    };
 
     public IEnumerable<DataRef> Written(Statement statement)
     {
