@@ -181,7 +181,7 @@ public sealed partial class DialectRules
     private static string ToJson(IReadOnlyList<DialectRule> rules)
     {
         using var stream = new MemoryStream();
-        using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
             w.WriteStartObject();
             w.WriteNumber("version", Version);

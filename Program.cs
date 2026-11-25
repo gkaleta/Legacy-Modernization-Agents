@@ -184,6 +184,9 @@ internal static class Program
         rootCommand.AddCommand(CobolToQuarkusMigration.Cli.RektPreprocessCommand.Build());
         rootCommand.AddCommand(CobolToQuarkusMigration.Cli.RektPlatformContractsCommand.Build());
 
+        // Site dialect rules for Starforge; only "teach-parser run" uses the AI endpoint.
+        rootCommand.AddCommand(CobolToQuarkusMigration.Cli.TeachParserCommand.Build(() => TeachEndpoint(settingsHelper, logger)));
+
         rootCommand.SetHandler(async (context) =>
         {
             var cobolSource = context.ParseResult.GetValueForOption(cobolSourceOption)!;
@@ -1419,6 +1422,10 @@ internal static class Program
         }
 
         var command = args.FirstOrDefault(a => !a.StartsWith('-'));
+        if (command is "teach-parser")
+        {
+            return args.SkipWhile(a => a != "teach-parser").Skip(1).FirstOrDefault(a => !a.StartsWith('-')) is "run";
+        }
 
         // doctor.sh calls list-models during setup to populate the model picker, before any
         // config file has been written; its handler talks to the Copilot SDK, not Azure.
@@ -1431,7 +1438,25 @@ internal static class Program
     // The live log is the portal's view of a conversion run. Offline helpers (program-facts,
     // jcl-facts, …) run during scans and must neither truncate it nor print its header.
     internal static bool CapturesLiveLog(string[] args) =>
-        RequiresAiSettings(args) && args.FirstOrDefault(a => !a.StartsWith('-')) is not "mcp";
+        RequiresAiSettings(args) && args.FirstOrDefault(a => !a.StartsWith('-')) is not ("mcp" or "teach-parser");
+
+    private static CobolToQuarkusMigration.Cli.TeachAiEndpoint TeachEndpoint(SettingsHelper settingsHelper, ILogger logger)
+    {
+        var settings = settingsHelper.LoadSettingsAsync<AppSettings>("Config/appsettings.json").GetAwaiter().GetResult() ?? new AppSettings();
+        OverrideSettingsFromEnvironment(settings);
+        var ai = settings.AISettings;
+        var service = string.IsNullOrWhiteSpace(ai.ServiceType) ? "AzureOpenAI" : ai.ServiceType.Trim();
+        var copilot = service.StartsWith("GitHubCopilot", StringComparison.OrdinalIgnoreCase);
+        var endpoint = copilot ? "your signed-in GitHub Copilot account"
+            : string.IsNullOrWhiteSpace(ai.ChatEndpoint) ? ai.Endpoint : ai.ChatEndpoint;
+        if (!copilot && string.IsNullOrWhiteSpace(endpoint))
+        {
+            throw new InvalidOperationException("no endpoint configured");
+        }
+
+        return new CobolToQuarkusMigration.Cli.TeachAiEndpoint(service, endpoint, ai.ResolveChatModelId(),
+            () => ChatClientFactory.CreateChatClientFromSettings(ai, logger));
+    }
 
     // Matched against the literals shipped in ai-config.env.example. An unedited placeholder that
     // passes validation resurfaces as a DNS or auth failure, not as "you have not configured this".

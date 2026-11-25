@@ -41,6 +41,8 @@ internal sealed partial class Parser
 
     private static bool IsReserved(string upper) => ReservedWords.Value.Contains(upper) || ScopeTerminators.Contains(upper);
 
+    internal static bool IsReservedWord(string upper) => IsReserved(upper);
+
     private bool IsIdentifierStart(int i)
     {
         if (!IsWordToken(i))

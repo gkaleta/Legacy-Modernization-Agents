@@ -46,7 +46,6 @@ internal sealed record ProgramSummary(
 
 internal static class CoverageCommand
 {
-    private static readonly string[] ProgramExtensions = { ".cbl", ".cob" };
 
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
@@ -109,31 +108,7 @@ internal static class CoverageCommand
         return exceptions == 0 && unaccounted == 0 && conflicts == 0 ? 0 : 1;
     }
 
-    internal static IEnumerable<string> DiscoverPrograms(string root)
-    {
-        var stack = new Stack<string>();
-        stack.Push(root);
-        while (stack.Count > 0)
-        {
-            var dir = stack.Pop();
-            foreach (var sub in Directory.EnumerateDirectories(dir))
-            {
-                // Dot folders hold generated output (.preprocessed, .previous snapshots), never source programs.
-                if (!Path.GetFileName(sub).StartsWith('.'))
-                {
-                    stack.Push(sub);
-                }
-            }
-
-            foreach (var f in Directory.EnumerateFiles(dir))
-            {
-                if (ProgramExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
-                {
-                    yield return f;
-                }
-            }
-        }
-    }
+    internal static IEnumerable<string> DiscoverPrograms(string root) => EstateFiles.DiscoverPrograms(root);
 
     private static ProgramSummary ProcessOne(CobolFrontEnd frontEnd, string root, string path, PathDisplay display, string outDir)
     {

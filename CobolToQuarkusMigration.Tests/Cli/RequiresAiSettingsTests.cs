@@ -57,9 +57,22 @@ public class RequiresAiSettingsTests
     [InlineData("jcl-facts")]
     [InlineData("rekt-scan-cache")]
     [InlineData("mcp")]
+    [InlineData("teach-parser")]
     public void OfflineHelpersAndMcp_DoNotCaptureTheLiveLog(string command)
     {
         Program.CapturesLiveLog([command, "--output", "out"]).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("report", false)]
+    [InlineData("list", false)]
+    [InlineData("remove", false)]
+    [InlineData("share", false)]
+    [InlineData("run", true)]
+    public void TeachParser_NeedsAiSettingsOnlyToRun(string subcommand, bool required)
+    {
+        Program.RequiresAiSettings(["teach-parser", subcommand, "--source", "source/x"]).Should().Be(required);
+        Program.CapturesLiveLog(["teach-parser", subcommand, "--source", "source/x"]).Should().BeFalse();
     }
 
     [Fact]

@@ -57,6 +57,10 @@
     <Compile Remove="output\**" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="Parser\Starforge.Cobol\Starforge.Cobol.csproj" />
+  </ItemGroup>
+
   <!-- Record the Copilot CLI version this SDK package expects so the running app can compare
        it against the CLI actually on the machine and report a version mismatch instead of an
        opaque protocol error. Runs as a target rather than a plain ItemGroup so it reads the

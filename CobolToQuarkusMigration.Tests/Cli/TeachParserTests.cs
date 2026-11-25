@@ -1,0 +1,156 @@
+using CobolToQuarkusMigration.Cli;
+using FluentAssertions;
+using Microsoft.Extensions.AI;
+using Starforge.Cobol.Dialect;
+using Xunit;
+
+namespace CobolToQuarkusMigration.Tests.Cli;
+
+// Every estate here is made up; the include word follows the public Panvalet ++INCLUDE form.
+public sealed class TeachParserTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "teach-" + Guid.NewGuid().ToString("N"));
+    private readonly string _estate;
+    private readonly string _rulesPath;
+
+    public TeachParserTests()
+    {
+        _estate = Path.Combine(_root, "est");
+        _rulesPath = Path.Combine(_root, "Config", "starforge-dialect.local.json");
+        Directory.CreateDirectory(_estate);
+    }
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    private static string A(string t) => "       " + t;
+
+    private static string B(string t) => "           " + t;
+
+    private void Write(string rel, params string[] lines)
+    {
+        var path = Path.Combine(_estate, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, string.Join("\n", lines) + "\n");
+    }
+
+    private void IncludeProgram()
+    {
+        Write("copy/CUSTREC.cpy", A("01  CUST-REC."), B("05  CUST-BALANCE PIC S9(7)V99 COMP-3."));
+        Write("cobol/ORDERS.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. ORDERS."), A("DATA DIVISION."), A("WORKING-STORAGE SECTION."),
+            A("01  WS-SECRET-NAME PIC X(20) VALUE 'ACME HOLDINGS'."), "      *    PRIVATE NOTE ABOUT THE CUSTOMER",
+            A("++INCLUDE CUSTREC"), A("PROCEDURE DIVISION."), B("MOVE 0 TO CUST-BALANCE."), B("GOBACK."));
+    }
+
+    private sealed class FakeClient(string answer) : IChatClient
+    {
+        public List<string> Prompts { get; } = [];
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            Prompts.Add(messages.Last().Text);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, answer)));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose() { }
+    }
+
+    private async Task<(string Output, FakeClient Client, bool Created)> Run(string answers, string aiAnswer)
+    {
+        var client = new FakeClient(aiAnswer);
+        var created = false;
+        var output = new StringWriter();
+        var exit = await new TeachParser(new StringReader(answers), output).RunAsync([_estate], _rulesPath, DialectRules.Empty,
+            () => new TeachAiEndpoint("AzureOpenAI", "https://example.invalid", "test-model", () => { created = true; return client; }));
+        exit.Should().Be(0, output.ToString());
+        return (output.ToString(), client, created);
+    }
+
+    [Fact]
+    public async Task ConsentedCopyAliasIsVerifiedAndSaved()
+    {
+        IncludeProgram();
+
+        var (output, client, _) = await Run("y\ny\n", """{"category":"dialect-rule","explanation":"Panvalet include.","rule":{"kind":"copyAlias"}}""");
+
+        var prompt = client.Prompts.Should().ContainSingle().Subject;
+        prompt.Should().Contain("++INCLUDE W").And.Contain("PIC X(20) VALUE '...'").And.Contain("(comment removed)");
+        prompt.Should().NotContainAny("CUSTREC", "WS-SECRET-NAME", "ACME", "PRIVATE", "ORDERS");
+        output.Should().Contain("Fixes 1 of 1 place(s).").And.Contain("Nothing else changed.").And.Contain("It read every place in every program.");
+        var rule = TeachParserCommand.LoadRules(_rulesPath).Rules.Should().ContainSingle().Subject;
+        rule.Should().Match<DialectRule>(r => r.Kind == DialectRuleKind.CopyAlias && r.Word == "++INCLUDE" && r.Id == "copy-include");
+    }
+
+    [Fact]
+    public async Task SkippingSendsNothing()
+    {
+        IncludeProgram();
+
+        var (output, client, created) = await Run("s\n", "{}");
+
+        created.Should().BeFalse();
+        client.Prompts.Should().BeEmpty();
+        output.Should().Contain("No rules saved.");
+        File.Exists(_rulesPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ASourceErrorIsNotTurnedIntoARule()
+    {
+        Write("cobol/BAD.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. BAD."), A("PROCEDURE DIVISION."), B("DISPLAY 'OPEN"), B("GOBACK."));
+
+        var (output, _, _) = await Run("y\n", """{"category":"source-error","explanation":"The literal has no closing quote."}""");
+
+        output.Should().Contain("Fix the source; no rule is saved.");
+        File.Exists(_rulesPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AStatementRuleThatSwallowsTheNextStatementIsNotSaved()
+    {
+        Write("cobol/TRC.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. TRC."), A("DATA DIVISION."), A("WORKING-STORAGE SECTION."),
+            A("01  WS-A PIC X."), A("PROCEDURE DIVISION."), B("XTRACE WS-A MOVE 'B' TO WS-A."), B("GOBACK."));
+
+        var (output, _, _) = await Run("y\ny\nu\ny\n", """{"category":"dialect-rule","explanation":"Site trace.","rule":{"kind":"statement","end":"period"}}""");
+
+        output.Should().Contain("Still not read: 1").And.Contain("Not saved");
+        File.Exists(_rulesPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task NotCobolOnlyExcludesFilesThatFailAtTheirFirstLine()
+    {
+        Write("cobol/TXDEFS.cbl", A("TRANSACTION-TABLE ROWS 12"), A("ENTRY T001 HANDLER-A"));
+
+        var (output, _, _) = await Run("y\ny\n", """{"category":"not-cobol","explanation":"A table definition."}""");
+
+        TeachParserCommand.LoadRules(_rulesPath).NotProgram("est/cobol/TXDEFS.cbl").Should().NotBeNull();
+        output.Should().Contain("Excludes 1 file(s) as not programs.");
+    }
+
+    [Fact]
+    public void ShareHoldsOnlyTheGenericRuleAndAMadeUpExample()
+    {
+        var rules = DialectRules.Create([new DialectRule("copy-include", DialectRuleKind.CopyAlias, "++INCLUDE", Reason: "seen in ORDERS")]);
+        var output = new StringWriter();
+
+        new TeachParser(new StringReader(string.Empty), output).Share(rules, "copy-include").Should().Be(0);
+
+        output.ToString().Should().Contain("Nothing has been sent").And.Contain("\"word\": \"++INCLUDE\"").And.Contain("++INCLUDE EXAMPLEC")
+            .And.NotContain("ORDERS");
+    }
+
+    [Theory]
+    [InlineData("Sure! ```json\n{\"category\":\"parser-gap\",\"explanation\":\"x\"}\n```", "parser-gap")]
+    [InlineData("{\"category\":\"dialect-rule\",\"explanation\":\"x\",\"rule\":{\"kind\":\"statement\",\"end\":\"END-XTRACE\"}}", "dialect-rule")]
+    public void AnswersAreReadFromTheFirstJsonObject(string text, string category)
+        => TeachParser.ParseAnswer(text).Category.Should().Be(category);
+
+    [Fact]
+    public void AnUnknownCategoryIsRejected()
+        => FluentActions.Invoking(() => TeachParser.ParseAnswer("""{"category":"rewrite-it"}""")).Should().Throw<InvalidDataException>();
+}
