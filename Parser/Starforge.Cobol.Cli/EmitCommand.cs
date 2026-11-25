@@ -37,6 +37,13 @@ internal static class EmitCommand
             .OrderBy(display.Show, StringComparer.Ordinal)
             .ToList();
         var programs = discovered.Where(p => rules.NotProgram(display.Show(p)) is null).ToList();
+        var excluded = discovered.Except(programs).Select(display.Show).ToList();
+        if (excluded.Count > 0)
+        {
+            // Callers that keep their own program list (doctor.sh) skip these instead of reporting "no output".
+            Directory.CreateDirectory(outDir);
+            File.WriteAllText(Path.Combine(outDir, "not-programs.txt"), string.Join("\n", excluded) + "\n");
+        }
 
         var frontEnd = new CobolFrontEnd(new FrontEndOptions(roots, Rules: rules));
         var options = roots.ToDictionary(r => r, EstateOptions, StringComparer.Ordinal);
@@ -69,7 +76,7 @@ internal static class EmitCommand
 
         stdout.WriteLine($"programs={programs.Count} files={counts.Sum()} exceptions={failures.Count} " +
             $"elapsed={clock.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture)}s" +
-            (rules.IsEmpty ? string.Empty : $" excluded={discovered.Count - programs.Count} rules={rules.Sha256[..12]}"));
+            (rules.IsEmpty ? string.Empty : $" excluded={excluded.Count} rules={rules.Sha256[..12]}"));
         foreach (var (program, error) in failures.OrderBy(f => f.Program, StringComparer.Ordinal))
         {
             stderr.WriteLine($"{program}: {error}");

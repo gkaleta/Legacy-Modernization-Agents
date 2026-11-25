@@ -342,6 +342,8 @@ show_usage() {
     echo -e "  ${GREEN}rekt-full${NC}       Run parse then ingest"
     echo -e "                  ${CYAN}--parallel N${NC} parses N programs at once (1-16, default 1 or REKT_PARSE_JOBS)"
     echo -e "  ${GREEN}rekt-status${NC}     Show REKT container, graph, and export status"
+    echo -e "  ${GREEN}teach-parser${NC}    Teach Starforge code it could not read, with your own AI endpoint (asks before sending)"
+    echo -e "                  ${CYAN}run${NC} (default) | ${CYAN}report${NC} | ${CYAN}list${NC} | ${CYAN}remove <id>${NC} | ${CYAN}share <id>${NC}; rules stay in Config/starforge-dialect.local.json"
     echo -e "  ${GREEN}verify-ai-loop${NC}  Check the running portal's AI Loop catalogues native scans:"
     echo -e "                  ${CYAN}--scan <name>${NC} (repeatable, under output/rekt-scans) ${CYAN}[--model-run <id>]${NC}"
     echo
@@ -2940,6 +2942,21 @@ starforge_cli() {
     lma_cli_run "$_STARFORGE_CLI_ASSEMBLY" "$@"
 }
 
+# Site rules taught with ./doctor.sh teach-parser. The file stays local (git-ignored); every
+# Starforge parse reads it when it exists. STARFORGE_RULES points at another file.
+starforge_rules_file() {
+    printf '%s\n' "${STARFORGE_RULES:-$REPO_ROOT/Config/starforge-dialect.local.json}"
+}
+
+# Sets _STARFORGE_RULES_ARGS to "--rules <file>" when the rules file exists, else to nothing.
+starforge_rules_args() {
+    local rules
+    rules="$(starforge_rules_file)"
+    _STARFORGE_RULES_ARGS=()
+    [[ -f "$rules" ]] && _STARFORGE_RULES_ARGS=(--rules "$rules")
+    return 0
+}
+
 # Random version-4 UUID as 32 lowercase hex digits. Git Bash for Windows may lack
 # both /proc/sys/kernel/random/uuid and uuidgen, so /dev/urandom is the fallback.
 new_run_identity() {
@@ -3428,9 +3445,14 @@ run_starforge_emit() {
     local tree="$1" estate status=0
     shift
     rm -rf "$tree"
+    starforge_rules_args
+    if (( ${#_STARFORGE_RULES_ARGS[@]} > 0 )); then
+        echo -e "  ${BLUE}Starforge: using taught rules from ${_STARFORGE_RULES_ARGS[1]#"$REPO_ROOT"/}${NC}"
+    fi
     for estate in "$@"; do
         echo -e "  ${BLUE}[$estate] Starforge: parsing in-process (no container)${NC}"
-        starforge_cli emit --source "$(rekt_estate_dir "$estate")" --out "$tree/$estate" || status=$?
+        starforge_cli emit --source "$(rekt_estate_dir "$estate")" --out "$tree/$estate" \
+            ${_STARFORGE_RULES_ARGS[@]+"${_STARFORGE_RULES_ARGS[@]}"} || status=$?
         # Exit 1 lists programs that threw; they fail on their own below, the rest still parse.
         if (( status > 1 )); then
             echo -e "${RED}❌ [$estate] Starforge emit failed (exit $status).${NC}" >&2
@@ -3440,14 +3462,111 @@ run_starforge_emit() {
     done
 }
 
-# Starforge names a program <estate folder>/<path in estate>; doctor names it by its path in source/.
+# Starforge and taught rules name a program <estate folder>/<path in estate>; doctor names it by its path in source/.
+starforge_display_path() {
+    local estate_dir source_file
+    estate_dir="$(rekt_estate_dir "$(rekt_estate_of "$1")")"
+    source_file="$REPO_ROOT/source/$1"
+    printf '%s/%s\n' "$(basename "$estate_dir")" "${source_file#"$estate_dir"/}"
+}
+
+# Programs a taught notProgram rule excluded from the emit in <tree>, as Starforge names them.
+starforge_not_programs() {
+    local tree="$1" estate
+    shift
+    for estate in "$@"; do
+        [[ -f "$tree/$estate/not-programs.txt" ]] && cat "$tree/$estate/not-programs.txt"
+    done
+    return 0
+}
+
+# The folders a Starforge parse reads, decided as in run_rekt_parse_impl (one group of programs
+# means one estate, source/). teach-parser must read the same folders: taught notProgram paths
+# start with the folder name.
+starforge_estate_dirs() {
+    local programs groups estate
+    programs="$(rekt_source_programs)" || return 1
+    [[ -n "$programs" ]] || return 0
+    groups="$(while IFS= read -r rel; do [[ -n "$rel" ]] && rekt_estate_of "$rel"; done <<< "$programs" | sort -u)"
+    if (( $(grep -c . <<< "$groups") <= 1 )); then
+        rekt_estate_dir .all
+    else
+        while IFS= read -r estate; do rekt_estate_dir "$estate"; done <<< "$groups"
+    fi
+}
+
+# ./doctor.sh teach-parser [run|report|list|remove <id>|share <id>]. See docs/teach-the-parser.md.
+run_teach_parser() {
+    local sub="${1:-run}"
+    (( $# == 0 )) || shift
+    case "$sub" in
+        run|report|list|remove|share) ;;
+        *)
+            echo -e "${RED}❌ Usage: ./doctor.sh teach-parser [run|report|list|remove <id>|share <id>]${NC}" >&2
+            return 2 ;;
+    esac
+    ensure_lma_cli || return 1
+    local -a args=("$sub")
+    if [[ "$sub" == run || "$sub" == report ]]; then
+        local dirs dir
+        dirs="$(starforge_estate_dirs)" || return 1
+        if [[ -z "$dirs" ]]; then
+            echo -e "${RED}❌ No COBOL programs in source/.${NC}" >&2
+            return 1
+        fi
+        while IFS= read -r dir; do args+=(--source "$dir"); done <<< "$dirs"
+    fi
+    if [[ "$sub" == run ]] && ! { load_configuration >/dev/null && load_ai_config >/dev/null 2>&1; }; then
+        echo -e "${RED}❌ No AI configuration. Run ./doctor.sh setup first.${NC}" >&2
+        return 1
+    fi
+    (cd "$REPO_ROOT" && lma_cli teach-parser "${args[@]}" "$@" --rules "$(starforge_rules_file)")
+}
+
+starforge_rules_checksum() {
+    local rules
+    rules="$(starforge_rules_file)"
+    [[ -f "$rules" ]] && cksum < "$rules"
+    return 0
+}
+
+# After a Starforge parse: list the code it could not read and offer to teach it. <rerun> is the
+# command to repeat when new rules are saved; "hint" prints the command instead of asking.
+starforge_offer_teach() {
+    local rerun="$1" mode="${2:-ask}" report before choice
+    [[ "$PARSER_ENGINE" == starforge ]] || return 0
+    report="$(run_teach_parser report 2>/dev/null)" || return 0
+    grep -q '^Places it could not read' <<< "$report" || return 0
+    echo ""
+    echo -e "${CYAN}Starforge could not read some code. Programs with these places are Partial:${NC}"
+    grep -v '^Teach Starforge these' <<< "$report" | grep -v '^$' | sed 's/^/  /'
+    if [[ "$mode" != ask || ! -t 0 || ! -t 1 ]]; then
+        echo -e "  ${BLUE}To teach Starforge with your own AI endpoint: ./doctor.sh teach-parser${NC}"
+        return 0
+    fi
+    echo ""
+    echo -e "  ${GREEN}1)${NC} Teach Starforge with my AI endpoint (shows what would be sent and asks first)"
+    echo -e "  ${GREEN}2)${NC} Skip (default)"
+    read -r -p "  Choice [2]: " choice
+    [[ "$choice" == 1 ]] || return 0
+    before="$(starforge_rules_checksum)"
+    run_teach_parser run || return 0
+    [[ "$(starforge_rules_checksum)" != "$before" ]] || return 0
+    echo ""
+    read -r -p "  Parse again with the new rules now? [Y/n]: " choice
+    if [[ "$choice" =~ ^[Nn] ]]; then
+        echo -e "  ${BLUE}The next parse uses them: ./doctor.sh ${rerun//_/-}${NC}"
+        return 0
+    fi
+    # Cached results were made without the new rules.
+    _REKT_INCREMENTAL=false "run_$rerun" || return $?
+    starforge_offer_teach "$rerun" hint
+}
+
 starforge_place_report() {
     local tree="$1" rel_program="$2" err_log="$3"
-    local estate estate_dir source_file from to
-    estate="$(rekt_estate_of "$rel_program")"
-    estate_dir="$(rekt_estate_dir "$estate")"
-    source_file="$REPO_ROOT/source/$rel_program"
-    from="$tree/$estate/$(basename "$estate_dir")/${source_file#"$estate_dir"/}"
+    local from to
+    from="$tree/$(rekt_estate_of "$rel_program")/$(starforge_display_path "$rel_program")"
     to="$REPO_ROOT/output/rekt/$rel_program"
     if [[ ! -f "$from-deps.json" ]]; then
         echo "starforge: no output for $rel_program; see the emit errors above" >> "$err_log"
@@ -3496,9 +3615,11 @@ starforge_export_dependencies() {
     if lma_cli rekt-evidence dependency-search-view \
         --staging-root "$estate_staging" --relative-path "$rel_program" 2>>"$err_log"; then
         [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies (Starforge): $rel_program"
+        starforge_rules_args
         starforge_cli native-export \
             --program "$estate_staging/.dependency-input/$rel_program/$(basename "$rel_program")" \
             --copybooks "$estate_staging" "${profile_args[@]}" \
+            ${_STARFORGE_RULES_ARGS[@]+"${_STARFORGE_RULES_ARGS[@]}"} \
             --out "$REPO_ROOT/output/rekt/${rel_program}-deps.json" 2>>"$err_log" || export_status=$?
     else
         export_status=24
@@ -4006,7 +4127,7 @@ run_rekt_parse_impl() {
     # Fall back through parser modes for dialect and source-format incompatibilities.
     local succeeded=0
     local failed=0
-    local skipped=0
+    local skipped=0 not_program_count=0
     local filtered_out=0
     local failed_files=""
     local degraded=0
@@ -4322,6 +4443,24 @@ run_rekt_parse_impl() {
             rm -rf "$parse_results" "$starforge_tree"
             return 1
         }
+        local not_programs
+        not_programs="$(starforge_not_programs "$starforge_tree" "${rekt_estates[@]}")"
+        if [[ -n "$not_programs" ]]; then
+            local -a still_programs=()
+            for cbl_file in "${parse_queue[@]}"; do
+                local estate_rel="${cbl_file#"$staging_base"/}"
+                local rel_program="${estate_rel#*/}"
+                if grep -Fxq -- "$(starforge_display_path "$rel_program")" <<< "$not_programs"; then
+                    echo -e "  ${BLUE}⏭  not a program (taught rule)${NC}  $rel_program"
+                    native_activity_program "$rel_program" NotProgram
+                    not_program_count=$((not_program_count + 1))
+                else
+                    still_programs+=("$cbl_file")
+                fi
+            done
+            parse_queue=(${still_programs[@]+"${still_programs[@]}"})
+            parse_total=${#parse_queue[@]}
+        fi
     fi
     if (( parse_jobs > 1 )); then
         rekt_stage "Parse programs ($parse_total, up to $parse_jobs at once — REKT_PARSE_JOBS)"
@@ -4526,6 +4665,9 @@ run_rekt_parse_impl() {
     rm -f "$rekt_programs_file"
 
     echo -e "\n${GREEN}  Parsed: $succeeded succeeded ($skipped from cache), $failed failed${NC}"
+    if (( not_program_count > 0 )); then
+        echo -e "  ${BLUE}Not programs (taught rule, not parsed): $not_program_count${NC}"
+    fi
     if [[ "$rekt_filter_active" == "true" && "$filtered_out" -gt 0 ]]; then
         echo -e "  ${BLUE}Filter active: $filtered_out program(s) outside _REKT_PROGRAM_FILTER were skipped.${NC}"
     fi
@@ -5374,7 +5516,8 @@ main() {
         "rekt"|"rekt-parse")
             validate_rekt_parse_jobs || exit 1
             validate_parser_engine || exit 1
-            run_rekt_parse
+            run_rekt_parse || exit $?
+            starforge_offer_teach rekt_parse
             ;;
         "rekt-ingest")
             run_rekt_ingest
@@ -5382,10 +5525,14 @@ main() {
         "rekt-full")
             validate_rekt_parse_jobs || exit 1
             validate_parser_engine || exit 1
-            run_rekt_full
+            run_rekt_full || exit $?
+            starforge_offer_teach rekt_full
             ;;
         "rekt-status")
             run_rekt_status
+            ;;
+        "teach-parser")
+            run_teach_parser "${@:2}"
             ;;
         "verify-ai-loop")
             run_verify_ai_loop "${@:2}"

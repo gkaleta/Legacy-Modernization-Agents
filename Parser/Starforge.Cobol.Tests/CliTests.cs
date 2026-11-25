@@ -54,7 +54,7 @@ public sealed class CliTests
         exit.Should().Be(0, stderr);
         stdout.Should().StartWith("programs=1 ").And.Contain(" excluded=1 rules=");
         Directory.Exists(Path.Combine(outDir, name, "cobol", "TXNDEF.cbl.report")).Should().BeFalse();
-
+        File.ReadAllText(Path.Combine(outDir, "not-programs.txt")).Should().Be($"{name}/cobol/TXNDEF.cbl\n");
         File.WriteAllText(rules, """{"version":1,"rules":[{"id":"Bad Id","kind":"notProgram","paths":["x.cbl"]}]}""");
         var bad = Run("emit", "--source", estate.Root, "--out", outDir, "--rules", rules);
         bad.Exit.Should().Be(2);

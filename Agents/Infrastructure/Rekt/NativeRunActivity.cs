@@ -17,7 +17,7 @@ public static class NativeRunActivity
         "resolvedDefinitionsTruncated", "reportPath", "dependencyEvidencePath", "parseLogPath",
     ];
 
-    private static readonly HashSet<string> CompleteStatuses = ["Full", "NoDialect", "cached"];
+    private static readonly HashSet<string> CompleteStatuses = ["Full", "NoDialect", "cached", "NotProgram"];
 
     private static void Write(string path, JsonNode data)
     {
