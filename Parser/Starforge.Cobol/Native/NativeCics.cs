@@ -72,8 +72,8 @@ internal sealed partial class NativeCics
     }
 
     // The CICS statement for one EXEC CICS block plus the DFHRESP/DFHVALUE values inside it. Links receives the
-    // programs a LINK binds, which the caller exports as CICS_LINK dependencies.
-    public List<JsonObject> Statements(ExecStatementSyntax exec, CicsCommand command, ProgramUnit unit, List<string> diagnostics, List<string> links)
+    // programs a LINK or RUN TRANSID binds, which the caller exports as CICS_LINK or CICS_RUN dependencies.
+    public List<JsonObject> Statements(ExecStatementSyntax exec, CicsCommand command, ProgramUnit unit, List<string> diagnostics, List<(string Name, string Kind)> links)
     {
         var tokens = _data.Roots.Tokens;
         var blockToken = -1;
@@ -112,7 +112,7 @@ internal sealed partial class NativeCics
         }
     }
 
-    private List<JsonObject> Build(ExecStatementSyntax exec, string block, int blockStart, List<XToken> x, string verb, ProgramUnit unit, List<string> links)
+    private List<JsonObject> Build(ExecStatementSyntax exec, string block, int blockStart, List<XToken> x, string verb, ProgramUnit unit, List<(string Name, string Kind)> links)
     {
         var end = x.Count - 1;
         var options = new List<Option>();
@@ -231,10 +231,10 @@ internal sealed partial class NativeCics
 
         if (command.Link is { } linked)
         {
-            links.Add(linked);
+            links.Add((linked, "CICS_LINK"));
         }
 
-        links.AddRange(command.Started);
+        links.AddRange(command.Started.Select(started => (started, "CICS_RUN")));
 
         var last = x[end - 1];
         var statementStart = blockStart + x[2].Start;
@@ -283,7 +283,7 @@ internal sealed partial class NativeCics
     {
         public string? Link { get; set; }
 
-        // Programs a RUN TRANSID starts, exported like LINK targets.
+        // Programs a RUN TRANSID starts. CICS runs them as separate asynchronous tasks, so they export as CICS_RUN.
         public List<string> Started { get; } = [];
 
         public List<Option> All(string name) => Options.Where(o => o.Name == name).ToList();

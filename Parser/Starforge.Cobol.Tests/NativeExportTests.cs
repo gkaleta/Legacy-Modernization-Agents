@@ -71,6 +71,12 @@ public sealed class NativeExportTests : IDisposable
     private static JsonObject Statement(JsonObject document, string operation) =>
         document["dependencyDialectStatements"]!.AsArray().Select(s => s!.AsObject()).Single(s => (string?)s["operation"] == operation);
 
+    private static JsonObject Statement(JsonObject document, string operation, int index) =>
+        document["dependencyDialectStatements"]!.AsArray().Select(s => s!.AsObject()).Where(s => (string?)s["operation"] == operation).ElementAt(index);
+
+    private static List<string> Kinds(JsonObject document) =>
+        document["dependencies"]!.AsArray().Select(d => (string)d!["dependencyKind"]!).Where(k => k != "COPY").ToList();
+
     private static List<JsonObject> Bindings(JsonObject statement, string kind) =>
         statement["resourceBindings"]!.AsArray().Select(b => b!.AsObject()).Where(b => (string?)b["kind"] == kind).ToList();
 
@@ -141,6 +147,7 @@ public sealed class NativeExportTests : IDisposable
         Text(proof["stringSyntax"]).Should().Be("STRING 'OCR' DELIMITED BY SIZE WS-CNT DELIMITED BY SIZE INTO WS-TRANSID END-STRING");
         JsonNode.DeepEquals(transactions[1]["targetResolution"], proof).Should().BeTrue();
         Callees(document).Should().Equal("AGY1", "AGY2");
+        Kinds(document).Should().Equal("CICS_RUN", "CICS_RUN");
     }
 
     [Fact]
@@ -193,6 +200,33 @@ public sealed class NativeExportTests : IDisposable
         ((string)program["targetResolution"]!["kind"]!).Should().Be("literal");
         ((string)program["programSourcePath"]!).Should().Be(Path.Join(_estate.Root, "src", "SUB.cbl"));
         Callees(document).Should().Equal("SUB");
+        Kinds(document).Should().Equal("CICS_LINK");
+    }
+
+    [Fact]
+    public void CicsReturn_IsRecordedAsAControlTransfer_InEveryExportedProgram()
+    {
+        Main([Fixed.A("01 WS-A PIC X(4).")],
+        [
+            "EXEC CICS LINK PROGRAM('SUB') COMMAREA(WS-A) END-EXEC.",
+            "EXEC CICS RETURN TRANSID('OCR1')",
+            "     COMMAREA(WS-A) END-EXEC.",
+            "EXEC CICS RETURN END-EXEC.",
+        ]);
+        _estate.Write("src/SUB.cbl", Fixed.A("IDENTIFICATION DIVISION."), Fixed.A("PROGRAM-ID. SUB."),
+            Fixed.A("PROCEDURE DIVISION."), Fixed.B("EXEC CICS RETURN END-EXEC."));
+
+        var document = Export();
+
+        Diagnostics(document).Should().BeEmpty();
+        var transfers = document["dependencyControlTransfers"]!.AsArray().Select(t => t!.AsObject()).ToList();
+        transfers.Select(t => (string)t["variant"]!).Should().Equal("options", "bare");
+        transfers.Should().OnlyContain(t => (string)t["kind"]! == "EXEC_CICS" && (string)t["operation"]! == "RETURN"
+            && (string)t["controlEffect"]! == "return-to-cics");
+        ((string)transfers[0]["sourceText"]!).Should().StartWith("RETURN TRANSID('OCR1')");
+        ((string)transfers[1]["line"]!).Should().Be(Statement(document, "RETURN", 1)["line"]!.ToString());
+        var linked = document["dependencies"]!.AsArray().Single()!;
+        linked["dependencyControlTransfers"]!.AsArray().Select(t => (string)t!["variant"]!).Should().Equal("bare");
     }
 
     [Fact]

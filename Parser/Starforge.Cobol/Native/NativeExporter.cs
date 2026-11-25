@@ -147,7 +147,7 @@ public static class NativeExporter
 
                             break;
                         case ExecStatementSyntax { Parsed: CicsCommand command } exec:
-                            var links = new List<string>();
+                            var links = new List<(string Name, string Kind)>();
                             foreach (var dialect in cics.Statements(exec, command, units[u], diagnostics, links))
                             {
                                 statements.Add(dialect);
@@ -155,7 +155,7 @@ public static class NativeExporter
 
                             foreach (var link in links)
                             {
-                                if (seen.Add("CICS_LINK:" + link) && Link(link, active, diagnostics) is { } linked)
+                                if (seen.Add(link.Kind + ":" + link.Name) && Link(link.Name, link.Kind, active, diagnostics) is { } linked)
                                 {
                                     children.Add(linked);
                                 }
@@ -246,7 +246,7 @@ public static class NativeExporter
                 ["dependencyProducer"] = Producer,
                 ["dependencyCoverage"] = coverage,
                 ["dependencyDiagnostics"] = new JsonArray(diagnostics.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
-                ["dependencyControlTransfers"] = new JsonArray(),
+                ["dependencyControlTransfers"] = ControlTransfers(cics),
                 ["dependencyDialectStatements"] = statements,
                 ["commareaInventory"] = inventory,
                 ["dependencyDerivedInputs"] = DerivedInputs(children),
@@ -275,6 +275,24 @@ public static class NativeExporter
 
             return inputs;
         }
+
+        // EXEC CICS RETURN ends the program and gives control back to CICS (or to the LINKing program), so the
+        // statements after it on that path do not run. Line and column are strings, as in the REKT export.
+        private static JsonArray ControlTransfers(List<JsonObject> cics) => new(cics
+            .Where(s => (string?)s["operation"] == "RETURN" && (string?)s["grammarRule"] != "CicsValue")
+            .Select(s => (JsonNode)new JsonObject
+            {
+                ["kind"] = "EXEC_CICS",
+                ["operation"] = "RETURN",
+                ["variant"] = BareReturn(s) ? "bare" : "options",
+                ["controlEffect"] = "return-to-cics",
+                ["sourceText"] = (string?)s["sourceText"],
+                ["coordinateSpace"] = (string?)s["coordinateSpace"],
+                ["line"] = s["line"]!.ToString(),
+                ["column"] = s["column"]!.ToString(),
+                ["runtimeMapping"] = "unverified",
+            })
+            .ToArray());
 
         private static bool BareReturn(JsonObject statement) =>
             (string?)statement["operation"] == "RETURN" && statement["syntax"]?["children"] is JsonArray { Count: 1 } children
@@ -585,7 +603,7 @@ public static class NativeExporter
             };
         }
 
-        private JsonObject? Link(string name, HashSet<string> active, List<string> diagnostics)
+        private JsonObject? Link(string name, string kind, HashSet<string> active, List<string> diagnostics)
         {
             var callee = Path.GetFullPath(Source(name)!);
             if (active.Contains(callee))
@@ -594,7 +612,7 @@ public static class NativeExporter
                 return null;
             }
 
-            return Program(callee, name, "CICS_LINK", active);
+            return Program(callee, name, kind, active);
         }
 
         // DFHRESP/DFHVALUE values in procedure statements, found as CicsValue nodes anywhere in the syntax tree.
