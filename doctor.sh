@@ -222,6 +222,62 @@ ensure_copilot_cli_for_build() {
     echo -e "${YELLOW}   • export CopilotNpmRegistryUrl=<your npm mirror>${NC}"
     echo -e "${YELLOW}   See docs/building-behind-an-npm-registry-block.md${NC}"
 }
+
+copilot_cli_version_of() {
+    "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+version_lt() {
+    [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$1" ]]
+}
+
+# The Copilot CLI version the referenced SDK package was built for, read from the restored
+# package. Empty before the first restore.
+copilot_sdk_cli_version() {
+    local sdk props
+    sdk="$(sed -nE 's|.*Include="GitHub\.Copilot\.SDK" Version="([^"]+)".*|\1|p' "$REPO_ROOT/CobolToQuarkusMigration.csproj" 2>/dev/null | head -1)"
+    [[ -n "$sdk" ]] || return 0
+    props="${NUGET_PACKAGES:-$HOME/.nuget/packages}/github.copilot.sdk/$sdk/build/GitHub.Copilot.SDK.props"
+    [[ -f "$props" ]] && sed -nE 's|.*<CopilotCliVersion>([^<]+)</CopilotCliVersion>.*|\1|p' "$props" | head -1
+    return 0
+}
+
+# The SDK starts the Copilot CLI it bundles at build time. COPILOT_CLI_PATH (which a Copilot CLI
+# session sets in every shell it opens) or CopilotCliBinaryPath swaps in another CLI, and a
+# different protocol version fails every AI call with "SDK protocol version mismatch".
+check_copilot_cli_versions() {
+    local indent="${1:-}" expected installed override
+    expected="$(copilot_sdk_cli_version)"
+
+    if command -v copilot >/dev/null 2>&1; then
+        installed="$(copilot_cli_version_of copilot)"
+    fi
+    if [[ -n "$installed" ]]; then
+        echo -e "${indent}${BLUE}ℹ️  Copilot CLI version: $installed${expected:+ (this app is built for $expected)}${NC}"
+        if [[ -n "$expected" ]] && version_lt "$installed" "$expected"; then
+            echo -e "${indent}${YELLOW}⚠️  Your Copilot CLI is older than the version this app is built for. Update it:${NC}"
+            echo -e "${indent}${YELLOW}   copilot update   (or: npm install -g @github/copilot@latest)${NC}"
+        fi
+    fi
+
+    if [[ -n "${COPILOT_CLI_PATH:-}" ]]; then
+        override="$(copilot_cli_version_of "$COPILOT_CLI_PATH")"
+        if [[ -z "$expected" || "$override" != "$expected" ]]; then
+            echo -e "${indent}${YELLOW}⚠️  COPILOT_CLI_PATH is set, so AI calls use Copilot CLI ${override:-of unknown version} instead of the one this app bundles${expected:+ ($expected):}${NC}"
+            echo -e "${indent}${YELLOW}   $COPILOT_CLI_PATH${NC}"
+            echo -e "${indent}${YELLOW}   A Copilot CLI session sets this in every shell it opens. If AI calls fail with${NC}"
+            echo -e "${indent}${YELLOW}   'SDK protocol version mismatch', run from a normal terminal or: unset COPILOT_CLI_PATH${NC}"
+        fi
+    fi
+
+    if [[ -n "${CopilotCliBinaryPath:-}" && -n "$expected" ]]; then
+        override="$(copilot_cli_version_of "$CopilotCliBinaryPath")"
+        if [[ -n "$override" ]] && version_lt "$override" "$expected"; then
+            echo -e "${indent}${YELLOW}⚠️  The build bundles your installed Copilot CLI $override (CopilotCliBinaryPath), older than${NC}"
+            echo -e "${indent}${YELLOW}   the $expected this app is built for. Update it: copilot update${NC}"
+        fi
+    fi
+}
 DEFAULT_MCP_HOST="localhost"
 # MCP_WEB_PORT in Config/ai-config.local.env moves the portal; a shell value still wins at launch.
 DEFAULT_MCP_PORT="$(read_local_config_value MCP_WEB_PORT)"
@@ -946,6 +1002,7 @@ run_doctor() {
                 # Check copilot CLI
                 if command -v copilot >/dev/null 2>&1; then
                     echo -e "  ${GREEN}✅ Copilot CLI found in PATH${NC}"
+                    check_copilot_cli_versions "  "
                 else
                     echo -e "  ${RED}❌ 'copilot' CLI not found in PATH${NC}"
                     echo -e "  ${YELLOW}   Install: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli${NC}"
@@ -1373,22 +1430,9 @@ run_setup() {
         echo -e "${GREEN}✅ GitHub host: ${GITHUB_HOST}${NC}"
         echo ""
 
-        # Check CLI version and update if needed (before auth, to avoid interrupted login)
-        local cli_version
-        cli_version=$(copilot --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        local min_version="0.0.394"
-        if [[ -n "$cli_version" ]]; then
-            echo -e "${BLUE}ℹ️  Copilot CLI version: $cli_version${NC}"
-            # Compare versions: sort -V puts the lower version first
-            local lower
-            lower=$(printf '%s\n%s' "$cli_version" "$min_version" | sort -V | head -1)
-            if [[ "$lower" == "$cli_version" && "$cli_version" != "$min_version" ]]; then
-                echo -e "${YELLOW}⚠️  Version $cli_version is below minimum $min_version. Updating...${NC}"
-                npm install -g @github/copilot@latest 2>&1 | tail -3
-                echo ""
-                echo -e "${GREEN}✅ Copilot CLI updated${NC}"
-            fi
-        fi
+        # Check the CLI version before auth, so an update does not interrupt the login
+        check_copilot_cli_versions
+        echo -e "${BLUE}ℹ️  Keep both current: 'git pull' brings this app's Copilot SDK updates, 'copilot update' updates the CLI.${NC}"
         echo ""
 
         # Authentication method selection

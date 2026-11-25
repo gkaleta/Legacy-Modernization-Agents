@@ -50,7 +50,7 @@ The Copilot SDK runs its own bundled Copilot runtime, which signs in one of two 
 > [!NOTE]
 > **`login` needs a completed `copilot login`.** Setup option 1 runs `copilot login` (with `--host` for a custom host) and waits for the browser sign-in; the model list it shows next comes from that account. Install the Copilot CLI beforehand (`npm install -g @github/copilot`). If the sign-in was skipped, failed or has expired, run `copilot login` and then `./doctor.sh setup` again. Running only `gh auth login` is not enough.
 
-If a Copilot call fails with `SDK protocol version mismatch`, the SDK started a different Copilot CLI from the one it bundles. This happens when `COPILOT_CLI_PATH` is set, for example in a shell opened from a Copilot CLI session. Unset it, or start `doctor.sh` and the portal from a normal terminal.
+If a Copilot call fails with `SDK protocol version mismatch`, the SDK started a different Copilot CLI from the one it bundles. This happens when `COPILOT_CLI_PATH` is set, for example in a shell opened from a Copilot CLI session. Unset it, or start `doctor.sh` and the portal from a normal terminal. `./doctor.sh setup` and `./doctor.sh doctor` show your Copilot CLI version next to the one this app is built for, warn when it is older (update with `copilot update`), and warn when `COPILOT_CLI_PATH` points to another version. Keep both current: `git pull` brings the app's Copilot SDK updates.
 
 Runs print the credential they use (`🔐 GitHub Copilot auth: ...`), and `dotnet run -- list-models` shows it before listing the models your account can use. `GITHUB_COPILOT_TOKEN`, written by older versions of setup, is still read.
 
