@@ -354,6 +354,7 @@ public static class FlowBuilder
             StopStatement stop => ("STOP", stop.Run ? "STOP RUN" : "STOP", stop.Run),
             FileStatement f => ("GENERIC_STATEMENT", f.Verb, false),
             ErrorStatement => ("GENERIC_STATEMENT", "ERROR", false),
+            TaughtStatement t => ("GENERIC_STATEMENT", t.Verb, false),
             _ => ("GENERIC_STATEMENT", s.GetType().Name[..^"Statement".Length].ToUpperInvariant(), false),
         };
 

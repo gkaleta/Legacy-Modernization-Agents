@@ -151,6 +151,10 @@ public sealed record ConditionalPhrase(HandlerKind Kind, bool Not, IReadOnlyList
 
 public sealed record ErrorStatement(NodeSpan Span, SourceRange Range, ErrorNode Error) : Statement(Span, Range);
 
+// A site statement read by a taught rule: its extent is known, its meaning is not. EffectsKnown is true only when a
+// person confirmed it changes no data and no control flow.
+public sealed record TaughtStatement(NodeSpan Span, SourceRange Range, string Verb, string RuleId, bool EffectsKnown) : Statement(Span, Range);
+
 public sealed record MoveStatement(NodeSpan Span, SourceRange Range, bool Corresponding, Expr Source, IReadOnlyList<Expr> Targets) : Statement(Span, Range);
 
 public sealed record ArithmeticTarget(Expr Target, bool Rounded, string? RoundingMode);

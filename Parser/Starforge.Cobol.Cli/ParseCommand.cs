@@ -7,7 +7,7 @@ internal static class ParseCommand
 {
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
-        cmd.RejectUnknown("source", "out");
+        cmd.RejectUnknown("source", "out", "rules");
         if (cmd.Positional.Count != 1)
         {
             throw new UsageException("parse expects exactly one program file");
@@ -26,7 +26,7 @@ internal static class ParseCommand
             roots.Add(Path.GetDirectoryName(file)!);
         }
 
-        var frontEnd = new CobolFrontEnd(new FrontEndOptions(roots));
+        var frontEnd = new CobolFrontEnd(new FrontEndOptions(roots, Rules: CliApp.LoadRules(cmd)));
         var result = frontEnd.Process(file);
         var display = new PathDisplay(roots.Select(r => (r, Path.GetFileName(r))));
 

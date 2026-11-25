@@ -14,7 +14,8 @@ public sealed record FrontEndOptions(
     bool? DebuggingMode = null,
     bool? DecimalPointIsComma = null,
     int MaxCopyDepth = 50,
-    SourceFormat? Format = null);
+    SourceFormat? Format = null,
+    Dialect.DialectRules? Rules = null);
 
 public sealed class CompilationResult
 {
@@ -89,6 +90,11 @@ public sealed class CompilationResult
 
     public CoverageReport RebuildCoverage() => Coverage = Accounting.BuildReport();
 
+    // The taught rules this program was read with, and where they applied.
+    public Dialect.DialectRules Rules { get; internal set; } = Dialect.DialectRules.Empty;
+
+    public IReadOnlyList<Dialect.TaughtUse> TaughtUses { get; internal set; } = Array.Empty<Dialect.TaughtUse>();
+
     // Text Starforge read past without understanding it; compile-time checks such as invalid-picture are not listed.
     private static readonly HashSet<string> UnreadableCodes = new(StringComparer.Ordinal)
     {
@@ -147,7 +153,7 @@ public sealed class CobolFrontEnd
 
         var diagnostics = new List<Diagnostic>(logical.Diagnostics);
         var inclusions = new List<CopyInclusion>();
-        var expander = new CopyExpander(_resolver, _cache, accounting, diagnostics, inclusions, new CopyExpansionOptions(_options.MaxCopyDepth, debug));
+        var expander = new CopyExpander(_resolver, _cache, accounting, diagnostics, inclusions, new CopyExpansionOptions(_options.MaxCopyDepth, debug, _options.Rules));
         var copied = expander.ExpandProgram(program);
         var afterReplace = ReplaceStage.Apply(copied, new ExpandedSource(copied, accounting.Units), accounting, diagnostics);
         var expanded = new ExpandedSource(afterReplace, accounting.Units);
@@ -157,13 +163,15 @@ public sealed class CobolFrontEnd
         diagnostics.AddRange(lex.Diagnostics);
         MarkTokens(lex.Tokens, accounting);
 
-        var parse = CobolParser.Parse(lex.Tokens, new ParserOptions(comma, inclusions.Any(i => i.Idms)), accounting);
+        var parse = CobolParser.Parse(lex.Tokens, new ParserOptions(comma, inclusions.Any(i => i.Idms), _options.Rules), accounting);
         diagnostics.AddRange(parse.Diagnostics);
         var programs = DataLayout.Compute(parse.Syntax, accounting.Units);
         diagnostics.AddRange(programs.SelectMany(p => p.Diagnostics));
 
         var result = new CompilationResult(program, accounting.Units, inclusions, expanded, lex.Tokens, diagnostics, accounting, accounting.BuildReport(), debug, comma, parse.Syntax, programs, parse.ParsedExecs);
         result.Bindings = ProcedureResolver.Resolve(result, diagnostics);
+        result.Rules = _options.Rules ?? Dialect.DialectRules.Empty;
+        result.TaughtUses = expander.TaughtUses.Concat(parse.TaughtUses).ToList();
         return result;
     }
 

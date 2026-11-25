@@ -296,6 +296,7 @@ public static class SyntaxReport
         ArithmeticStatement a => a.Verb.ToString().ToUpperInvariant(),
         ExecStatementSyntax e => "EXEC " + e.Kind.ToString().ToUpperInvariant(),
         ErrorStatement => "ERROR",
+        TaughtStatement t => t.Verb,
         _ => s.GetType().Name[..^"Statement".Length].ToUpperInvariant(),
     };
 

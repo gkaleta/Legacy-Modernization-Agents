@@ -4,18 +4,19 @@ public static class CliApp
 {
     public const string Usage = """
         Usage:
-          starforge coverage --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rekt-baseline <dir>]
-          starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>]
-          starforge emit --source <estate-dir> [--source <estate-dir>...] --out <dir>
+          starforge coverage --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rekt-baseline <dir>] [--rules <file>]
+          starforge parse <program-file> [--source <estate-dir>...] [--out <file.json>] [--rules <file>]
+          starforge emit --source <estate-dir> [--source <estate-dir>...] --out <dir> [--rules <file>]
           starforge native-export --program <file> --copybooks <dir> [--profile <file.json>] [--cics-definitions <csd|yaml>...]
             [--vsam-definitions <idcams-jcl>...] [--sql-declarations <member>...] [--platform-contracts <file.json>]
-            [--commarea-closure <.commarea-closure.json>] --out <file-deps.json>
+            [--commarea-closure <.commarea-closure.json>] [--rules <file>] --out <file-deps.json>
           starforge diff-rekt --layouts --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt --procedure --rekt <rekt-baseline-dir> --source <estate-dir> [--source <estate-dir>...] --out <dir>
           starforge diff-rekt exec --source <estate-dir> [--source <estate-dir>...] --rekt-baseline <dir> --out <dir>
           starforge diff-rekt --model --rekt <rekt-baseline-dir> --starforge <emit-dir> --source <estate-dir>... --out <dir>
             [--starforge-evidence <PARSER_ENGINE=starforge output/rekt>]
             (runs Parser/Starforge.Cobol.ModelDiff, which loads both trees through the application's own readers)
+        --rules reads the site's taught dialect rules (Config/starforge-dialect.local.json; see docs/teach-the-parser.md).
         """;
 
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
@@ -61,6 +62,28 @@ public static class CliApp
             stderr.WriteLine(Usage);
             return 2;
         }
+        catch (RulesFileException ex)
+        {
+            stderr.WriteLine($"error: {ex.Message}");
+            return 2;
+        }
+    }
+
+    internal static Dialect.DialectRules LoadRules(CommandLine cmd)
+    {
+        if (cmd.Single("rules") is not { Length: > 0 } path)
+        {
+            return Dialect.DialectRules.Empty;
+        }
+
+        try
+        {
+            return Dialect.DialectRules.Load(Path.GetFullPath(path));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException)
+        {
+            throw new RulesFileException(ex.Message);
+        }
     }
 
     private static int NotYet(TextWriter stderr)
@@ -78,6 +101,8 @@ public static class CliApp
 }
 
 public sealed class UsageException(string message) : Exception(message);
+
+public sealed class RulesFileException(string message) : Exception(message);
 
 public sealed class CommandLine
 {

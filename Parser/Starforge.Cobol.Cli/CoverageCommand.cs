@@ -50,7 +50,7 @@ internal static class CoverageCommand
 
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
-        cmd.RejectUnknown("source", "out", "rekt-baseline");
+        cmd.RejectUnknown("source", "out", "rekt-baseline", "rules");
         var roots = cmd.All("source").Select(s => Path.GetFullPath(s)).ToList();
         if (roots.Count == 0)
         {
@@ -66,13 +66,15 @@ internal static class CoverageCommand
         var outDir = Path.GetFullPath(cmd.Required("out"));
         var baseline = cmd.Single("rekt-baseline") is { } b ? Path.GetFullPath(b) : null;
         var display = new PathDisplay(roots.Select(r => (r, Path.GetFileName(r))));
-        var programs = roots
+        var rules = CliApp.LoadRules(cmd);
+        var discovered = roots
             .SelectMany(r => DiscoverPrograms(r).Select(p => (Root: r, Path: p)))
             .OrderBy(p => display.Show(p.Path), StringComparer.Ordinal)
             .ToList();
+        var programs = discovered.Where(p => rules.NotProgram(display.Show(p.Path)) is null).ToList();
 
         Directory.CreateDirectory(outDir);
-        var frontEnd = new CobolFrontEnd(new FrontEndOptions(roots));
+        var frontEnd = new CobolFrontEnd(new FrontEndOptions(roots, Rules: rules));
         var summaries = new ConcurrentBag<ProgramSummary>();
         var clock = Stopwatch.StartNew();
         Parallel.ForEach(programs, p => summaries.Add(ProcessOne(frontEnd, p.Root, p.Path, display, outDir)));
@@ -80,7 +82,8 @@ internal static class CoverageCommand
 
         var ordered = summaries.OrderBy(s => s.Program, StringComparer.Ordinal).ToList();
         var rekt = baseline is null ? null : RektComparison.Build(baseline, ordered);
-        WriteSummaryJson(Path.Combine(outDir, "summary.json"), ordered, rekt);
+        WriteSummaryJson(Path.Combine(outDir, "summary.json"), ordered, rekt, rules,
+            discovered.Select(p => display.Show(p.Path)).Where(p => rules.NotProgram(p) is not null).ToList());
         File.WriteAllText(Path.Combine(outDir, "summary.md"), SummaryMarkdown(ordered, rekt), new UTF8Encoding(false));
         if (rekt is not null)
         {
@@ -95,7 +98,8 @@ internal static class CoverageCommand
             $"parsed={Pct(ordered.Sum(s => s.Count(CoverageClass.Parsed)), total)} id-env-data-parsed={Pct(ordered.Sum(s => s.Count(CoverageClass.Parsed)), ordered.Sum(s => s.DivisionScope))} error-nodes={ordered.Sum(s => s.ErrorNodeFingerprints.Count)} " +
             $"lexed={Pct(ordered.Sum(s => s.Count(CoverageClass.Lexed)), total)} comment={Pct(ordered.Sum(s => s.Count(CoverageClass.Comment)), total)} " +
             $"unsupported={Pct(ordered.Sum(s => s.Count(CoverageClass.Unsupported)), total)} unresolved-copybooks={ordered.SelectMany(s => s.Unresolved).Distinct().Count()} " +
-            $"elapsed={clock.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture)}s");
+            $"elapsed={clock.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture)}s" +
+            (rules.IsEmpty ? string.Empty : $" excluded={discovered.Count - programs.Count} rules={rules.Sha256[..12]}"));
         stdout.WriteLine($"report: {Path.Combine(outDir, "summary.md")}");
         foreach (var s in ordered.Where(s => s.Exception is not null))
         {
@@ -190,12 +194,25 @@ internal static class CoverageCommand
         return File.Exists(candidate) ? Starforge.Cobol.Source.SourceFile.Load(candidate).Lines.Count : null;
     }
 
-    private static void WriteSummaryJson(string path, IReadOnlyList<ProgramSummary> programs, RektComparison? rekt)
+    private static void WriteSummaryJson(string path, IReadOnlyList<ProgramSummary> programs, RektComparison? rekt,
+        Dialect.DialectRules rules, IReadOnlyList<string> excluded)
     {
         using var stream = File.Create(path);
         using var w = new Utf8JsonWriter(stream, JsonReport.WriterOptions);
         w.WriteStartObject();
         w.WriteString("milestone", "M3");
+        if (!rules.IsEmpty)
+        {
+            w.WriteString("rulesSha256", rules.Sha256);
+            w.WriteStartArray("excludedNotPrograms");
+            foreach (var p in excluded)
+            {
+                w.WriteStringValue(p);
+            }
+
+            w.WriteEndArray();
+        }
+
         WriteTotals(w, "totals", programs);
         w.WriteStartObject("estates");
         foreach (var g in programs.GroupBy(p => p.Estate).OrderBy(g => g.Key, StringComparer.Ordinal))

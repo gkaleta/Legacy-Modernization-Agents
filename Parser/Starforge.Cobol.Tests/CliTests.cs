@@ -39,6 +39,29 @@ public sealed class CliTests
     }
 
     [Fact]
+    public void EmitSkipsTaughtNotProgramPathsAndRejectsABadRulesFile()
+    {
+        using var estate = new TestEstate();
+        estate.Write("cobol/MAIN.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. MAIN."), A("PROCEDURE DIVISION."), B("GOBACK."));
+        estate.Write("cobol/TXNDEF.cbl", A("TXN-DEFINITION ROWS."));
+        var name = Path.GetFileName(estate.Root);
+        var rules = estate.Write("rules.json",
+            """{"version":1,"rules":[{"id":"txn","kind":"notProgram","paths":[""" + $"\"{name}/cobol/TXNDEF.cbl\"" + "]}]}");
+        var outDir = Path.Combine(estate.Root, "out");
+
+        var (exit, stdout, stderr) = Run("emit", "--source", estate.Root, "--out", outDir, "--rules", rules);
+
+        exit.Should().Be(0, stderr);
+        stdout.Should().StartWith("programs=1 ").And.Contain(" excluded=1 rules=");
+        Directory.Exists(Path.Combine(outDir, name, "cobol", "TXNDEF.cbl.report")).Should().BeFalse();
+
+        File.WriteAllText(rules, """{"version":1,"rules":[{"id":"Bad Id","kind":"notProgram","paths":["x.cbl"]}]}""");
+        var bad = Run("emit", "--source", estate.Root, "--out", outDir, "--rules", rules);
+        bad.Exit.Should().Be(2);
+        bad.Err.Should().Contain("error: ");
+    }
+
+    [Fact]
     public void ParseWritesTokenJson()
     {
         using var estate = new TestEstate();

@@ -21,6 +21,12 @@ internal sealed partial class Parser
     };
 
     private readonly Dictionary<int, Exec.ExecStatement> _execs = new();
+    private readonly List<(int Token, Dialect.TaughtUse Use)> _taughtUses = new();
+    private readonly Dialect.DialectRules? _rules;
+
+    internal static bool IsKnownVerb(string word) => SupportedVerbs.Contains(word);
+
+    public IReadOnlyList<Dialect.TaughtUse> TaughtUses => _taughtUses.Select(u => u.Use).ToList();
     private readonly List<DataRef> _dataRefs = new();
     private readonly List<ProcedureRef> _procRefs = new();
     private readonly HashSet<string> _conditionNames = new(StringComparer.OrdinalIgnoreCase);
@@ -70,7 +76,8 @@ internal sealed partial class Parser
         }
 
         var w = Up(i);
-        return w == "NEXT" ? IsWord(i + 1, "SENTENCE") : SupportedVerbs.Contains(w) || UnsupportedVerbs.Contains(w) || (_idms && IdmsForm(i) is not null);
+        return w == "NEXT" ? IsWord(i + 1, "SENTENCE") : SupportedVerbs.Contains(w) || UnsupportedVerbs.Contains(w) || (_idms && IdmsForm(i) is not null)
+            || _rules?.Statement(w) is not null;
     }
 
     private static readonly HashSet<string> ScopeTerminators = new(StringComparer.Ordinal)
@@ -320,6 +327,11 @@ internal sealed partial class Parser
             }
 
             var verb = Up(_pos);
+            if (_rules?.Statement(verb) is { } rule)
+            {
+                return ParseTaught(rule);
+            }
+
             if (UnsupportedVerbs.Contains(verb))
             {
                 // XML/JSON GENERATE and PARSE carry a second verb word that must not end the skipped span.
@@ -376,12 +388,13 @@ internal sealed partial class Parser
     {
         for (var k = first; k < _pos; k++)
         {
-            if (_marks[k] == Consumed)
+            if (_marks[k] is Consumed or Taught)
             {
                 _marks[k] = Skipped;
             }
         }
 
+        _taughtUses.RemoveAll(u => u.Token >= first);
         _dataRefs.RemoveRange(refMark.Data, _dataRefs.Count - refMark.Data);
         _procRefs.RemoveRange(refMark.Proc, _procRefs.Count - refMark.Proc);
         var failAt = Math.Min(_pos, _ts.Count - 1);
@@ -410,6 +423,58 @@ internal sealed partial class Parser
         var node = new ErrorNode(span, range, diagnostic);
         _allErrors.Add(node);
         return new ErrorStatement(span, range, node);
+    }
+
+    // A taught site statement: the verb and everything up to its END- word, or up to (not including) the sentence's
+    // period when no other statement starts in between. Anything else stays an error, so a rule never swallows code.
+    private Statement ParseTaught(Dialect.DialectRule rule)
+    {
+        var first = _pos;
+        var k = first + 1;
+        int stop;
+        if (rule.End == Dialect.DialectRule.PeriodEnd)
+        {
+            while (k < _ts.Count && !IsPeriod(k) && !IsStatementStart(k) && !IsScopeTerminator(k) && !IsWord(k, "ELSE") && !IsWord(k, "WHEN")
+                && !BodyStop(k) && !IsSectionStart(k) && !(IsParagraphHeader(k) && InAreaA(k)))
+            {
+                k++;
+            }
+
+            if (k >= _ts.Count || !IsPeriod(k))
+            {
+                throw new ParseFailure("taught-statement-boundary", $"{rule.Word} (rule {rule.Id}) must end at the sentence's period before any other statement");
+            }
+
+            stop = k;
+        }
+        else
+        {
+            while (k < _ts.Count && !IsPeriod(k) && !IsWord(k, rule.End!) && !BodyStop(k) && !IsSectionStart(k))
+            {
+                k++;
+            }
+
+            if (k >= _ts.Count || !IsWord(k, rule.End!))
+            {
+                throw new ParseFailure("taught-statement-boundary", $"{rule.Word} (rule {rule.Id}) has no {rule.End} before the period");
+            }
+
+            stop = k + 1;
+        }
+
+        for (var t = first; t < stop; t++)
+        {
+            if (_marks[t] == Untouched)
+            {
+                _marks[t] = Taught;
+            }
+        }
+
+        _pos = stop;
+        var span = SpanFrom(first);
+        var range = RangeOf(span);
+        _taughtUses.Add((first, new Dialect.TaughtUse(rule.Id, Dialect.DialectRuleKind.Statement, rule.Word!, range)));
+        return new TaughtStatement(span, range, rule.Word!, rule.Id, rule.Effects == Dialect.StatementEffects.None);
     }
 
     // For a failed statement with a scope terminator (IF ... END-IF), the index after its matching terminator when one

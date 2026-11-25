@@ -115,7 +115,7 @@ internal sealed class ReachingDefinitions
         {
             switch (statement)
             {
-                case GoToStatement { Targets.Count: 0 } or AlterStatement or NextSentenceStatement or EntryStatement or ErrorStatement:
+                case GoToStatement { Targets.Count: 0 } or AlterStatement or NextSentenceStatement or EntryStatement or ErrorStatement or TaughtStatement { EffectsKnown: false }:
                 case ExitStatement { Kind: not ("" or "PROGRAM" or "PARAGRAPH" or "SECTION") }:
                 case ExecStatementSyntax { Parsed: CicsCommand { Verb: "HANDLE" or "PUSH" or "POP" } }:
                 case ExecStatementSyntax { Parsed: SqlStatement { StatementKind: SqlStatementKind.Whenever } }:

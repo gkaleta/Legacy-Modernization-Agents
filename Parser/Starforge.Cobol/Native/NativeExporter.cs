@@ -23,7 +23,8 @@ public sealed record NativeExportOptions(
     IReadOnlyList<string>? VsamDefinitions = null,
     IReadOnlyList<string>? SqlDeclarations = null,
     string? PlatformContracts = null,
-    string? CommareaClosure = null);
+    string? CommareaClosure = null,
+    Dialect.DialectRules? Rules = null);
 
 // Writes the native dependency contract the dependency evidence gate verifies, from Starforge's own parse.
 // Statement and definition trees are Starforge nodes with source ranges; a construct this exporter cannot
@@ -45,7 +46,7 @@ public static class NativeExporter
     {
         var program = Path.GetFullPath(options.ProgramPath);
         var profile = options.ProfilePath is { Length: > 0 } p ? Profile.Load(Path.GetFullPath(p)) : null;
-        var frontEnd = new CobolFrontEnd(new FrontEndOptions(new[] { Path.GetFullPath(options.CopybookRoot) }));
+        var frontEnd = new CobolFrontEnd(new FrontEndOptions(new[] { Path.GetFullPath(options.CopybookRoot) }, Rules: options.Rules));
         var catalog = CicsCatalog.Load(options.CicsDefinitions ?? []);
         var vsam = VsamCatalog.Load(options.VsamDefinitions ?? []);
         var sql = SqlCatalog.Load(frontEnd, options.SqlDeclarations ?? []);

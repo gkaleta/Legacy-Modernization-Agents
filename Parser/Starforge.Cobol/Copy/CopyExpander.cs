@@ -15,7 +15,7 @@ public sealed class SourceCache
             key => new Lazy<LogicalSource>(() => SourceReader.Read(SourceFile.Load(key.Path), new SourceReaderOptions(key.Debug, IsProgram: false)))).Value;
 }
 
-public sealed record CopyExpansionOptions(int MaxDepth = 50, bool DebuggingMode = false);
+public sealed record CopyExpansionOptions(int MaxDepth = 50, bool DebuggingMode = false, Dialect.DialectRules? Rules = null);
 
 internal sealed class CopyExpander
 {
@@ -27,6 +27,9 @@ internal sealed class CopyExpander
     private readonly CopyExpansionOptions _options;
     private readonly List<string> _active = new();
     private string _programPath = string.Empty;
+
+    // Places a taught copy alias (e.g. ++INCLUDE) was expanded.
+    public List<Dialect.TaughtUse> TaughtUses { get; } = new();
 
     public CopyExpander(CopybookResolver resolver, SourceCache cache, TokenAccounting accounting, List<Diagnostic> diagnostics, List<CopyInclusion> inclusions, CopyExpansionOptions options)
     {
@@ -95,6 +98,14 @@ internal sealed class CopyExpander
                 continue;
             }
 
+            if (_options.Rules is { IsEmpty: false } rules && rules.CopyAlias(text.Substring(w.Start, w.Length)) is { } alias
+                && i + 1 < words.Count && words[i + 1].Kind is TextWordKind.Word or TextWordKind.Literal
+                && unit.Source.RangeOf(words[i + 1].Start, words[i + 1].End).StartLine == unit.Source.RangeOf(w.Start, w.End).StartLine)
+            {
+                i = ExpandAlias(unit, source, words, i, output, ref cursor, alias);
+                continue;
+            }
+
             if (ReplacingParser.Is(text, w, "-COPY") && i + 1 < words.Count && words[i + 1].Kind == TextWordKind.Word)
             {
                 i = ExpandDashCopy(unit, source, words, i, output, ref cursor);
@@ -137,6 +148,27 @@ internal sealed class CopyExpander
         }
 
         output.Append(source, cursor, text.Length);
+    }
+
+    // A taught include word: `<word> name [.]` on one line, expanded like a plain COPY name (no OF, SUPPRESS or REPLACING).
+    private int ExpandAlias(SourceUnit unit, OriginText source, List<TextWord> words, int i, OriginTextBuilder output, ref int cursor, Dialect.DialectRule alias)
+    {
+        var text = source.Text;
+        var start = words[i].Start;
+        var line = unit.Source.RangeOf(start, words[i].End).StartLine;
+        var last = i + 1;
+        if (last + 1 < words.Count && words[last + 1].Kind == TextWordKind.Period
+            && unit.Source.RangeOf(words[last + 1].Start, words[last + 1].End).StartLine == line)
+        {
+            last++;
+        }
+
+        var end = words[last].End;
+        output.Append(source, cursor, start);
+        cursor = end;
+        TaughtUses.Add(new Dialect.TaughtUse(alias.Id, Dialect.DialectRuleKind.CopyAlias, alias.Word!, unit.Source.RangeOf(start, end)));
+        Include(unit, output, CopyStatementKind.Copy, start, end, text.Substring(words[i + 1].Start, words[i + 1].Length), null, false, Array.Empty<ReplacingPair>());
+        return last;
     }
 
     // Site precompilers accept `-COPY NAME [-PRE PREFIX-][.]`; plain forms behave like COPY.

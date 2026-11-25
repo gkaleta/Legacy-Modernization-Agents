@@ -10,7 +10,7 @@ internal static class NativeExportCommand
 
     public static int Run(CommandLine cmd, TextWriter stdout, TextWriter stderr)
     {
-        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "platform-contracts", "commarea-closure", "out");
+        cmd.RejectUnknown("program", "copybooks", "profile", "cics-definitions", "vsam-definitions", "sql-declarations", "platform-contracts", "commarea-closure", "rules", "out");
         if (cmd.Positional.Count > 0)
         {
             throw new UsageException($"unexpected argument '{cmd.Positional[0]}'");
@@ -64,7 +64,7 @@ internal static class NativeExportCommand
 
         var document = NativeExporter.Export(new NativeExportOptions(
             program, copybooks, profile is { Length: > 0 } ? profile : null, cics, vsam, sql, platform is { Length: > 0 } ? platform : null,
-            closure is { Length: > 0 } ? closure : null));
+            closure is { Length: > 0 } ? closure : null, CliApp.LoadRules(cmd)));
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         File.WriteAllText(output, document.ToJsonString(Indented) + "\n");
         var diagnostics = document["dependencyDiagnostics"]!.AsArray();

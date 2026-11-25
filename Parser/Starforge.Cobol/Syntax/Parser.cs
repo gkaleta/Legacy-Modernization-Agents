@@ -5,10 +5,14 @@ using Starforge.Cobol.Source;
 namespace Starforge.Cobol.Syntax;
 
 // Idms: the program uses the IDMS DML precompiler (a COPY IDMS was expanded), so DML statements are recognized.
-public sealed record ParserOptions(bool DecimalPointIsComma = false, bool Idms = false);
+// Rules: the site's taught statement words (Dialect.DialectRules); null reads standard COBOL only.
+public sealed record ParserOptions(bool DecimalPointIsComma = false, bool Idms = false, Dialect.DialectRules? Rules = null);
 
 // ParsedExecs: EXEC blocks the procedure parser already parsed, by token index, so ExecPass need not re-parse them.
-public sealed record ParseResult(CompilationUnitSyntax Syntax, IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyDictionary<int, Exec.ExecStatement> ParsedExecs);
+public sealed record ParseResult(CompilationUnitSyntax Syntax, IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyDictionary<int, Exec.ExecStatement> ParsedExecs)
+{
+    public IReadOnlyList<Dialect.TaughtUse> TaughtUses { get; init; } = Array.Empty<Dialect.TaughtUse>();
+}
 
 public static class CobolParser
 {
@@ -18,7 +22,7 @@ public static class CobolParser
         var parser = new Parser(tokens, options ?? new ParserOptions());
         var unit = parser.ParseCompilationUnit();
         parser.ApplyCoverage(accounting);
-        return new ParseResult(unit, parser.Diagnostics, parser.ParsedExecs);
+        return new ParseResult(unit, parser.Diagnostics, parser.ParsedExecs) { TaughtUses = parser.TaughtUses };
     }
 }
 
@@ -28,6 +32,7 @@ internal sealed partial class Parser
     private const byte Consumed = 1;
     private const byte Skipped = 2;
     private const byte Opaque = 3;
+    private const byte Taught = 4;
 
     private readonly TokenStream _ts;
     private readonly byte[] _marks;
@@ -42,6 +47,7 @@ internal sealed partial class Parser
         _marks = new byte[tokens.Count];
         _decimalPointIsComma = options.DecimalPointIsComma;
         _idmsOption = options.Idms;
+        _rules = options.Rules is { IsEmpty: false } rules ? rules : null;
     }
 
     public List<Diagnostic> Diagnostics { get; } = new();
@@ -387,10 +393,12 @@ internal sealed partial class Parser
                 mark = Skipped;
             }
 
-            if (accounting is not null && mark is Consumed or Skipped)
+            if (accounting is not null && mark is Consumed or Skipped or Taught)
             {
+                // A taught statement's boundaries are known but not its meaning, so it never counts as parsed.
                 var to = mark == Consumed ? CoverageClass.Parsed : CoverageClass.Unsupported;
-                accounting.PromoteExpanded(text, _ts[i].Start, _ts[j - 1].End, CoverageClass.Lexed, to, mark == Consumed ? string.Empty : "syntax-error");
+                var reason = mark switch { Consumed => string.Empty, Taught => "taught-statement", _ => "syntax-error" };
+                accounting.PromoteExpanded(text, _ts[i].Start, _ts[j - 1].End, CoverageClass.Lexed, to, reason);
             }
 
             i = j;

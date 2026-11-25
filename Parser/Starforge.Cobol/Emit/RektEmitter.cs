@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Starforge.Cobol.Deps;
+using Starforge.Cobol.Dialect;
 using Starforge.Cobol.Flow;
 using Starforge.Cobol.Semantics;
 using Starforge.Cobol.Syntax;
@@ -24,7 +25,8 @@ public sealed record RektEmitOptions(CicsDefinitions? Cics = null, string? Platf
 
 // Writes the files downstream readers load from a REKT report tree, in the same layout and JSON vocabulary:
 // <rel>-deps.json and <rel>.report/{flow_ast,cfg,data_structures}/..., plus parse-diagnostics.json when copybooks are
-// missing or source text could not be read; the evidence gate treats every entry there as incomplete evidence.
+// missing, source text could not be read or a taught statement's effects are unknown; the evidence gate treats every
+// entry there as incomplete evidence. taught-rules.json records which taught rules (and ruleset hash) read the program.
 public static class RektEmitter
 {
     public static IReadOnlyList<EmittedFile> Render(CompilationResult result, string relativePath, RektEmitOptions? options = null)
@@ -52,7 +54,10 @@ public static class RektEmitter
         files.Add(new(report + "data_structures/" + basename + "-data.json", Json(w => WriteData(w, result, data, platform))));
         var missing = deps.MissingCopybooks.Select(c => c.Member).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var unreadable = result.UnreadableSource();
-        if (missing.Count > 0 || unreadable.Count > 0)
+        var unknownEffects = result.TaughtUses
+            .Where(u => u.Kind == DialectRuleKind.Statement && result.Rules.Statement(u.Word) is not { Effects: StatementEffects.None })
+            .ToList();
+        if (missing.Count > 0 || unreadable.Count > 0 || unknownEffects.Count > 0)
         {
             files.Add(new(report + "parse-diagnostics.json", Json(w =>
             {
@@ -75,7 +80,39 @@ public static class RektEmitter
                     w.WriteEndObject();
                 }
 
+                foreach (var u in unknownEffects)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("code", "taught statement");
+                    w.WriteString("severity", "WARNING");
+                    w.WriteString("message", $"{u.Word} (rule {u.RuleId}, effects unknown) at {Path.GetFileName(u.Range.File)} line {u.Range.StartLine}");
+                    w.WriteEndObject();
+                }
+
                 w.WriteEndArray();
+            })));
+        }
+
+        if (result.TaughtUses.Count > 0)
+        {
+            files.Add(new(report + "taught-rules.json", Json(w =>
+            {
+                w.WriteStartObject();
+                w.WriteString("rulesSha256", result.Rules.Sha256);
+                w.WriteStartArray("uses");
+                foreach (var u in result.TaughtUses.OrderBy(u => u.Range.File, StringComparer.Ordinal).ThenBy(u => u.Range.StartLine))
+                {
+                    w.WriteStartObject();
+                    w.WriteString("rule", u.RuleId);
+                    w.WriteString("kind", DialectRules.KindName(u.Kind));
+                    w.WriteString("word", u.Word);
+                    w.WriteString("file", Path.GetFileName(u.Range.File));
+                    w.WriteNumber("line", u.Range.StartLine);
+                    w.WriteEndObject();
+                }
+
+                w.WriteEndArray();
+                w.WriteEndObject();
             })));
         }
 
