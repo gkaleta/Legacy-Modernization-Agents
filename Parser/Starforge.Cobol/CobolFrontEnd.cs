@@ -89,6 +89,24 @@ public sealed class CompilationResult
 
     public CoverageReport RebuildCoverage() => Coverage = Accounting.BuildReport();
 
+    // Text Starforge read past without understanding it; compile-time checks such as invalid-picture are not listed.
+    private static readonly HashSet<string> UnreadableCodes = new(StringComparer.Ordinal)
+    {
+        "unterminated-literal", "unexpected-character", "continuation-missing-quote", "exec-without-end-exec",
+        "exec-malformed-block", "exec-unknown-kind", "malformed-copy-statement", "malformed-replace-statement",
+        "copy-prefix-unsupported", "parser-gap",
+    };
+
+    // Source text Starforge could not read: parser error nodes and errors over unread text, one per code and place.
+    // Semantic findings (unresolved names, layout notes, missing copybooks) are reported elsewhere.
+    public IReadOnlyList<Diagnostic> UnreadableSource()
+        => Syntax.Errors.Concat(Syntax.AllPrograms().SelectMany(p => p.AllErrors())).Select(e => e.Diagnostic)
+            .Concat(Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error && UnreadableCodes.Contains(d.Code)))
+            .Where(d => d.Range is not null)
+            .DistinctBy(d => (d.Code, d.Range!.Value.File, d.Range.Value.StartLine))
+            .OrderBy(d => d.Range!.Value.File, StringComparer.Ordinal).ThenBy(d => d.Range!.Value.StartLine).ThenBy(d => d.Code, StringComparer.Ordinal)
+            .ToList();
+
     // Characters of the given class inside PROCEDURE DIVISION bodies.
     public long CountInProcedureBodies(CoverageClass cls)
         => Syntax.AllPrograms()

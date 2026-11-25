@@ -101,4 +101,42 @@ public sealed class EmitRoundTripTests : IDisposable
             "  5 WS-TAB pic=PIC X(2) usage= redefines= occurs=3 WORKING_STORAGE",
             "1 WS-ALT pic=PIC X(10). usage= redefines=WS-REC occurs= WORKING_STORAGE");
     }
+
+    private static IReadOnlyDictionary<string, string> Render(string estate, string program, string relative)
+        => RektEmitter.Render(new CobolFrontEnd(new FrontEndOptions(new[] { estate })).Process(program), relative)
+            .ToDictionary(f => f.RelativePath.Replace('\\', '/'), f => System.Text.Encoding.UTF8.GetString(f.ToBytes()));
+
+    [Fact]
+    public void UnreadableSourceIsReportedAsParseDiagnostics()
+    {
+        var estate = Path.Combine(_repo, "source", "est");
+        var program = Write(Path.Combine(estate, "cobol", "BAD.cbl"),
+            A("IDENTIFICATION DIVISION."),
+            A("PROGRAM-ID. BAD."),
+            A("PROCEDURE DIVISION."),
+            B("DISPLAY 'OK'."),
+            B("FROBNICATE THE WIDGET."),
+            B("GOBACK."));
+
+        var files = Render(estate, program, "est/cobol/BAD.cbl");
+
+        using var json = System.Text.Json.JsonDocument.Parse(files["est/cobol/BAD.cbl.report/parse-diagnostics.json"]);
+        json.RootElement.EnumerateArray()
+            .Select(d => $"{d.GetProperty("code").GetString()}|{d.GetProperty("severity").GetString()}|{d.GetProperty("message").GetString()}")
+            .Should().ContainSingle().Which.Should().Be("syntax error|ERROR|expected-statement at BAD.cbl line 5");
+    }
+
+    [Fact]
+    public void ReadableSourceWritesNoParseDiagnostics()
+    {
+        var estate = Path.Combine(_repo, "source", "est");
+        var program = Write(Path.Combine(estate, "cobol", "OK.cbl"),
+            A("IDENTIFICATION DIVISION."),
+            A("PROGRAM-ID. OK."),
+            A("PROCEDURE DIVISION."),
+            B("DISPLAY 'OK'."),
+            B("GOBACK."));
+
+        Render(estate, program, "est/cobol/OK.cbl").Keys.Should().NotContain(k => k.EndsWith("parse-diagnostics.json"));
+    }
 }

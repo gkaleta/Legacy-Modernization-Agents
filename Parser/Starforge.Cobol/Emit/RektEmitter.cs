@@ -23,7 +23,8 @@ public sealed record EmittedFile(string RelativePath, Action<Stream> WriteTo)
 public sealed record RektEmitOptions(CicsDefinitions? Cics = null, string? PlatformContracts = null);
 
 // Writes the files downstream readers load from a REKT report tree, in the same layout and JSON vocabulary:
-// <rel>-deps.json and <rel>.report/{flow_ast,cfg,data_structures}/..., plus parse-diagnostics.json when copybooks are missing.
+// <rel>-deps.json and <rel>.report/{flow_ast,cfg,data_structures}/..., plus parse-diagnostics.json when copybooks are
+// missing or source text could not be read; the evidence gate treats every entry there as incomplete evidence.
 public static class RektEmitter
 {
     public static IReadOnlyList<EmittedFile> Render(CompilationResult result, string relativePath, RektEmitOptions? options = null)
@@ -50,7 +51,8 @@ public static class RektEmitter
 
         files.Add(new(report + "data_structures/" + basename + "-data.json", Json(w => WriteData(w, result, data, platform))));
         var missing = deps.MissingCopybooks.Select(c => c.Member).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (missing.Count > 0)
+        var unreadable = result.UnreadableSource();
+        if (missing.Count > 0 || unreadable.Count > 0)
         {
             files.Add(new(report + "parse-diagnostics.json", Json(w =>
             {
@@ -61,6 +63,15 @@ public static class RektEmitter
                     w.WriteString("code", "missing copybook");
                     w.WriteString("severity", "WARNING");
                     w.WriteString("message", name);
+                    w.WriteEndObject();
+                }
+
+                foreach (var d in unreadable)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("code", "syntax error");
+                    w.WriteString("severity", "ERROR");
+                    w.WriteString("message", $"{d.Code} at {Path.GetFileName(d.Range!.Value.File)} line {d.Range.Value.StartLine}");
                     w.WriteEndObject();
                 }
 
