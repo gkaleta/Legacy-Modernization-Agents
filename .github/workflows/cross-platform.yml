@@ -7,6 +7,9 @@ on:
       - "**/*.cs"
       - "**/*.csproj"
       - "tools/**"
+      - "Parser/**"
+      - "McpChatWeb/wwwroot/**"
+      - "McpChatWeb.Tests/**"
       - ".gitattributes"
       - ".github/workflows/cross-platform.yml"
   push:
@@ -59,6 +62,21 @@ jobs:
         run: >-
           dotnet test CobolToQuarkusMigration.Tests -p:CopilotSkipCliDownload=true --nologo
           --filter "FullyQualifiedName~CobolToQuarkusMigration.Tests.Rekt.PreprocessForRektScriptTests|FullyQualifiedName~CobolToQuarkusMigration.Tests.Doctor.DoctorRektDependencyExportTests"
+
+      - name: Starforge parser
+        run: |
+          dotnet test Parser/Starforge.Cobol.Tests --nologo
+          dotnet test Parser/Starforge.Cobol.Contract.Tests --nologo
+
+      - name: Teach the parser and Starforge evidence
+        run: >-
+          dotnet test CobolToQuarkusMigration.Tests -p:CopilotSkipCliDownload=true --nologo
+          --filter "FullyQualifiedName~CobolToQuarkusMigration.Tests.Cli.TeachParserTests|FullyQualifiedName~StarforgeEvidenceTests|FullyQualifiedName~RektPreprocessorTests"
+
+      - name: Portal AI Loop
+        run: |
+          dotnet test McpChatWeb.Tests -p:CopilotSkipCliDownload=true --nologo --filter "FullyQualifiedName~AiLoopReaderTests"
+          node --test McpChatWeb.Tests/JavaScript/ai-loop.test.cjs McpChatWeb.Tests/Frontend/ai-loop.test.cjs
 
       - name: Portal process control
         run: >-
