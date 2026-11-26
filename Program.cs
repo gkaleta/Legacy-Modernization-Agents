@@ -23,8 +23,12 @@ namespace CobolToQuarkusMigration;
 /// </summary>
 internal static class Program
 {
+    // teach-parser prints its own short progress; the startup banner and info logs would bury it.
+    private static bool QuietStartup;
+
     public static async Task<int> Main(string[] args)
     {
+        QuietStartup = args.FirstOrDefault(a => !a.StartsWith('-')) is "teach-parser";
         // Start live log capture for portal's Live Run Log panel
         var logsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "Logs");
 
@@ -48,6 +52,10 @@ internal static class Program
                 });
                 // Suppress verbose JSON-RPC logging from GitHub Copilot SDK
                 builder.AddFilter("Microsoft.Copilot", LogLevel.Warning);
+                if (QuietStartup)
+                {
+                    builder.SetMinimumLevel(LogLevel.Warning);
+                }
             });
             var logger = loggerFactory.CreateLogger(nameof(Program));
             var fileHelper = new FileHelper(loggerFactory.CreateLogger<FileHelper>());
@@ -1284,7 +1292,7 @@ internal static class Program
                 Console.WriteLine($"   Expected: 'Java' or 'CSharp'. Falling back to: {applicationSettings.TargetLanguage}");
             }
         }
-        else
+        else if (!QuietStartup)
         {
             Console.WriteLine($"🎯 TARGET_LANGUAGE env var not set, using config default: {applicationSettings.TargetLanguage}");
         }
@@ -1563,7 +1571,10 @@ internal static class Program
                 try
                 {
                     var auth = CobolToQuarkusMigration.Agents.Infrastructure.CopilotAuth.Resolve();
-                    Console.WriteLine($"🔐 GitHub Copilot auth: {auth.Description}");
+                    if (!QuietStartup)
+                    {
+                        Console.WriteLine($"🔐 GitHub Copilot auth: {auth.Description}");
+                    }
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -1612,6 +1623,11 @@ internal static class Program
             var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT");
             var modelId = Environment.GetEnvironmentVariable("AZURE_OPENAI_MODEL_ID");
             var deployment = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME");
+
+            if (QuietStartup)
+            {
+                return true;
+            }
 
             Console.WriteLine($"✅ Configuration Validation Successful ({serviceType})");
             Console.WriteLine("=====================================");

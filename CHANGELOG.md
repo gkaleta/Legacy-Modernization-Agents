@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Docker image restores the Starforge projects** - The `Dockerfile` now copies the five `Parser/` project files before `dotnet restore`. The solution lists them, so restore failed without them.
+- **`teach-parser` starts quietly** - The command no longer prints the target language, Copilot sign-in and configuration banner lines or info logs before its own output.
+- **AST graph labels no longer repeat the type** - The AST Explorer graph showed labels such as `MOVE MOVE`. A node's name is now shown only when it differs from its type.
 - **Starforge reports code it could not read** - With `PARSER_ENGINE=starforge`, statements Starforge could not parse and lexical errors (an unterminated literal, an unexpected character, a continued literal without its quote, `EXEC` without `END-EXEC` or of an unknown kind, a malformed `COPY` or `REPLACE`, a `-COPY -PRE` prefix) are now written to `parse-diagnostics.json` as `syntax error` entries. Before, only missing copybooks were written there, so such programs, and members that are not COBOL programs, were wrongly marked Full. They are now Partial. Unresolved names and data layout notes do not change the outcome.
 - **REKT parses IDMS programs with its IDMS dialect** - `doctor.sh` now passes `--dialect=IDMS` to REKT for programs that contain `COPY IDMS` or an `IDMS-CONTROL SECTION`. Before, REKT read them as plain COBOL and never parsed their DML. Other programs are unchanged.
 - **`COPY IDMS member` no longer reports a missing copybook called IDMS** - The evidence gate, missing-copybook report, estate scan, program facts, conversion copybook lists and portal now read the member name after `COPY IDMS` (and `COPY IDMS RECORD`, `FILE`, `MODULE`, `LR`, `MAP`, `MAP-CONTROL`). A plain `COPY IDMS.` still means a copybook named IDMS.

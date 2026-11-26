@@ -8,6 +8,11 @@ COPY CobolToQuarkusMigration.csproj ./
 COPY McpChatWeb/McpChatWeb.csproj McpChatWeb/
 COPY CobolToQuarkusMigration.Tests/CobolToQuarkusMigration.Tests.csproj CobolToQuarkusMigration.Tests/
 COPY McpChatWeb.Tests/McpChatWeb.Tests.csproj McpChatWeb.Tests/
+COPY Parser/Starforge.Cobol/Starforge.Cobol.csproj Parser/Starforge.Cobol/
+COPY Parser/Starforge.Cobol.Cli/Starforge.Cobol.Cli.csproj Parser/Starforge.Cobol.Cli/
+COPY Parser/Starforge.Cobol.Tests/Starforge.Cobol.Tests.csproj Parser/Starforge.Cobol.Tests/
+COPY Parser/Starforge.Cobol.ModelDiff/Starforge.Cobol.ModelDiff.csproj Parser/Starforge.Cobol.ModelDiff/
+COPY Parser/Starforge.Cobol.Contract.Tests/Starforge.Cobol.Contract.Tests.csproj Parser/Starforge.Cobol.Contract.Tests/
 
 # Restore dependencies
 RUN dotnet restore Legacy-Modernization-Agents.sln
