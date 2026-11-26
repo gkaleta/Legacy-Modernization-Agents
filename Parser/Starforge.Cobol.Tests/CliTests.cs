@@ -10,7 +10,8 @@ public sealed class CliTests
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         var exit = CliApp.Run(args, stdout, stderr);
-        return (exit, stdout.ToString(), stderr.ToString());
+        // WriteLine ends lines with \r\n on Windows.
+        return (exit, stdout.ToString().Replace("\r\n", "\n"), stderr.ToString().Replace("\r\n", "\n"));
     }
 
     [Fact]
