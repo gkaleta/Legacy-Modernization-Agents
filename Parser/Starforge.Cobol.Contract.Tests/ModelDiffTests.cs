@@ -26,7 +26,7 @@ public sealed class ModelDiffTests : IDisposable
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         var exit = await ModelDiffProgram.Run(args, stdout, stderr);
-        return (exit, stdout.ToString(), stderr.ToString());
+        return (exit, stdout.ToString().Replace("\r\n", "\n"), stderr.ToString().Replace("\r\n", "\n"));
     }
 
     [Fact]

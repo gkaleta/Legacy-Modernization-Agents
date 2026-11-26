@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Converting one estate after parsing all of `source/`** - `convert-only --source source/<estate>` stopped at the dependency evidence gate with "missing dependency-evidence.json" for every program. The parse had stored the evidence under the estate path relative to `source/`. The conversion, and the portal's readiness check, now find that evidence, run from `source/` and convert only that estate's programs.
+- **Starforge tests on Windows** - The model-diff and platform-contract tests compare output with `\n` line endings, as the CLI tests already did.
 - **Docker image restores the Starforge projects** - The `Dockerfile` now copies the five `Parser/` project files before `dotnet restore`. The solution lists them, so restore failed without them.
 - **`teach-parser` starts quietly** - The command no longer prints the target language, Copilot sign-in and configuration banner lines or info logs before its own output.
 - **AST graph labels no longer repeat the type** - The AST Explorer graph showed labels such as `MOVE MOVE`. A node's name is now shown only when it differs from its type.

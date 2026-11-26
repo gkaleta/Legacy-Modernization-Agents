@@ -52,13 +52,15 @@ public sealed record DependencyReadiness(
         string sourceRoot, string factsRoot, IReadOnlyList<string>? selectors = null,
         CancellationToken ct = default)
     {
+        var scope = EstateEvidenceScope.Resolve(sourceRoot, factsRoot, selectors);
+        if (scope.Widened) sourceRoot = scope.SourceRoot;
         var files = (await new FileHelper(NullLogger<FileHelper>.Instance)
                 .ScanDirectoryForCobolFilesAsync(sourceRoot))
             .Where(file => !file.IsCopybook).ToList();
         ct.ThrowIfCancellationRequested();
-        if (selectors is { Count: > 0 })
+        if (scope.Widened || selectors is { Count: > 0 })
         {
-            files = ProgramSelection.Apply(files, selectors, out var unmatched);
+            files = ProgramSelection.Apply(files, scope.Widened ? scope.Selection : selectors, out var unmatched);
             if (unmatched.Count > 0)
                 throw new ArgumentException($"Selected programs are not present: {string.Join(", ", unmatched)}.");
         }

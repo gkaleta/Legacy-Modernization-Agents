@@ -610,6 +610,21 @@ internal static class Program
                 logger.LogWarning("PARTIAL DRAFT — NOT VERIFIED: skipping reverse engineering/reused context; only independently justified whole programs may convert.");
             }
 
+            if (!string.IsNullOrEmpty(settings.ApplicationSettings.CobolSourceFolder))
+            {
+                var repositoryRoot = Environment.GetEnvironmentVariable("REPO_ROOT") ?? Directory.GetCurrentDirectory();
+                var scope = EstateEvidenceScope.Resolve(settings.ApplicationSettings.CobolSourceFolder,
+                    ConversionEligibility.FactsDirectory(repositoryRoot),
+                    programSelection is { Count: > 0 } ? programSelection : settings.ApplicationSettings.ProgramSelection);
+                if (scope.Widened)
+                {
+                    Console.WriteLine($"📂 {scope.Estate} was parsed together with the rest of {scope.SourceRoot}; " +
+                        "converting its programs from there so they match the parser's evidence.");
+                    settings.ApplicationSettings.CobolSourceFolder = scope.SourceRoot;
+                    programSelection = scope.Selection;
+                }
+            }
+
             if (programSelection is { Count: > 0 })
             {
                 settings.ApplicationSettings.ProgramSelection = programSelection.ToList();

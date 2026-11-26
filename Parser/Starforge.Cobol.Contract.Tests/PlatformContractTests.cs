@@ -84,7 +84,7 @@ public sealed class PlatformContractTests : IDisposable
         }
         catch (TargetInvocationException e)
         {
-            return ["failed: " + e.InnerException!.Message];
+            return ["failed: " + e.InnerException!.Message.Replace("\r\n", "\n")];
         }
     }
 
