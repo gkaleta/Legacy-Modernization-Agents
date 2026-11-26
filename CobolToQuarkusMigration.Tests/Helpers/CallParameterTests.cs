@@ -29,6 +29,20 @@ public class CallParameterTests
     }
 
     [Fact]
+    public void ACopyReplacingItsRecordByTheParameterTypesIt() =>
+        CallTargetRegistry.UsingParameters(
+                "       LINKAGE SECTION.\n" +
+                "       COPY DELACC REPLACING DELACC-COMMAREA BY DFHCOMMAREA.\n" +
+                "       PROCEDURE DIVISION USING DFHCOMMAREA.\n")
+            .Should().Equal(new CallParameter("DFHCOMMAREA", "dfhcommarea", "Delacc"));
+
+    [Fact]
+    public void ACicsProgramWithoutUsingTakesItsCommarea() =>
+        CallTargetRegistry.UsingParameters(
+                "       LINKAGE SECTION.\n       01 DFHCOMMAREA.\n           COPY UPDACC.\n\n       PROCEDURE DIVISION.\n")
+            .Should().Equal(new CallParameter("DFHCOMMAREA", "dfhcommarea", "Updacc"));
+
+    [Fact]
     public void AProgramWithoutUsingHasNoParameters() =>
         CallTargetRegistry.UsingParameters("       PROCEDURE DIVISION.\n       MAIN.\n").Should().BeEmpty();
 

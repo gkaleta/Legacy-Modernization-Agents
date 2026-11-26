@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 
 // Removes model-written declarations of interfaces the scaffolding generates, so each is declared once
 // with the signature read from the COBOL. Only whole interface blocks with a generated name are touched.
+// Used for C# and Java: the Java form may be nested (static) and carry annotations.
 public static class GeneratedInterfaceDeclarations
 {
     public static string RemoveFrom(string code, IReadOnlyCollection<string> interfaceNames)
@@ -11,7 +12,7 @@ public static class GeneratedInterfaceDeclarations
         if (interfaceNames.Count == 0) return code;
         var names = string.Join("|", interfaceNames.Select(Regex.Escape));
         var header = new Regex(
-            @"(?<docs>(?:^[ \t]*(?:///|\[)[^\n]*\n)*)^[ \t]*(?:(?:public|internal|partial)\s+)*interface\s+(?:" + names + @")\b[^{;]*\{",
+            @"(?<docs>(?:^[ \t]*(?:///|\[|@)[^\n]*\n)*)^[ \t]*(?:(?:public|internal|partial|static|private|protected)\s+)*interface\s+(?:" + names + @")\b[^{;]*\{",
             RegexOptions.Multiline);
 
         while (header.Match(code) is { Success: true } match)

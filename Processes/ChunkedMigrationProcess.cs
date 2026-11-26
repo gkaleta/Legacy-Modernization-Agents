@@ -418,6 +418,23 @@ public class ChunkedMigrationProcess
                         sourceDirectory: cobolSourceFolder);
                 }
             }
+            else
+            {
+                try
+                {
+                    var written = JavaProjectScaffold.WriteCallTargetContracts(
+                        outputFolder, SourceCallTargets, ConversionNamespacePolicy.ForSharedTypes("Java"));
+                    if (written.Count > 0)
+                        _logger.LogInformation("Wrote {Count} call-target interface(s) read from the COBOL", written.Count);
+                    // Validation reads these copies; a parity repair writes them back.
+                    foreach (var file in allFiles.Where(f => File.Exists(f.FilePath)))
+                        file.Content = File.ReadAllText(file.FilePath);
+                }
+                catch (IOException ex)
+                {
+                    _logger.LogWarning("Could not write call-target interfaces: {Message}", ex.Message);
+                }
+            }
 
             // Generate reports
             await GenerateChunkedMigrationReportAsync(

@@ -8,6 +8,7 @@
 namespace CobolToQuarkusMigration.Helpers;
 
 using System.Text;
+using System.Text.RegularExpressions;
 
 /// <summary>An import prefix the generated Java uses, and the artifact that supplies it.</summary>
 public sealed record JavaDependency(string ImportPrefix, string GroupId, string ArtifactId, string? Version, string? Scope = null);
@@ -88,6 +89,55 @@ public static class JavaProjectScaffold
         }
         return written;
     }
+
+    /// <summary>
+    /// Writes one interface per called program whose signature the COBOL states into the shared
+    /// package, removes declarations of the same names the models wrote elsewhere, and imports the
+    /// interface where it is used. Returns the interface files written.
+    /// </summary>
+    public static IReadOnlyList<string> WriteCallTargetContracts(string runFolder, CallTargetRegistry callTargets,
+        string sharedPackage)
+    {
+        var interfaces = callTargets.RenderJavaInterfaces(sharedPackage);
+        if (interfaces.Count == 0 || !Directory.Exists(runFolder)) return [];
+        var names = interfaces.Keys.Select(Path.GetFileNameWithoutExtension).ToList();
+        var sharedFolder = Path.Join(runFolder, sharedPackage.Replace('.', Path.DirectorySeparatorChar));
+        var generated = interfaces.Keys.Select(file => Path.GetFullPath(Path.Join(sharedFolder, file)))
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var file in Directory.EnumerateFiles(runFolder, "*.java", SearchOption.AllDirectories)
+                     .Where(f => Path.GetRelativePath(runFolder, f).Split(Path.DirectorySeparatorChar)[0] != "target"
+                                 && !generated.Contains(Path.GetFullPath(f))))
+        {
+            var text = File.ReadAllText(file);
+            var updated = GeneratedInterfaceDeclarations.RemoveFrom(text, names);
+            if (!TypeDeclaration.IsMatch(updated))
+            {
+                // The file held nothing but a model's copy of a generated interface.
+                File.Delete(file);
+                continue;
+            }
+            var package = PackageLine.Match(updated);
+            if (package.Success && package.Groups["name"].Value != sharedPackage
+                && !updated.Contains($"import {sharedPackage}.*;", StringComparison.Ordinal))
+            {
+                var imports = names
+                    .Where(name => Regex.IsMatch(updated, $@"\b{name}\b")
+                                   && !updated.Contains($"import {sharedPackage}.{name};", StringComparison.Ordinal))
+                    .Select(name => $"\nimport {sharedPackage}.{name};");
+                updated = updated.Insert(package.Index + package.Length, string.Concat(imports));
+            }
+            if (updated != text) File.WriteAllText(file, updated);
+        }
+
+        Directory.CreateDirectory(sharedFolder);
+        foreach (var (file, content) in interfaces)
+            File.WriteAllText(Path.Join(sharedFolder, file), content);
+        return generated.OrderBy(path => path, StringComparer.Ordinal).ToList();
+    }
+
+    private static readonly Regex PackageLine = new(@"^\s*package\s+(?<name>[\w.]+)\s*;", RegexOptions.Multiline);
+    private static readonly Regex TypeDeclaration = new(@"\b(?:class|interface|enum|record)\s+[A-Za-z_]\w*");
 
     /// <summary>The dependencies the Java sources under runFolder import.</summary>
     public static IReadOnlyList<JavaDependency> Detect(string runFolder)

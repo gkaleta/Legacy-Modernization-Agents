@@ -468,6 +468,11 @@ public class MigrationProcess
                     _logger.LogWarning("Could not write build scaffolding: {Message}", ex.Message);
                 }
             }
+            else
+            {
+                WriteJavaCallTargetContracts(javaOutputFolder);
+                RefreshFromDisk(javaFiles);
+            }
 
             if (targetLang == TargetLanguage.CSharp && _settings.CompileGate.Enabled)
             {
@@ -746,6 +751,23 @@ public class MigrationProcess
 
         await File.WriteAllTextAsync(reportPath, report.ToString());
         _logger.LogInformation("Migration report generated: {ReportPath}", reportPath);
+    }
+
+    // Java has no scaffold step like C#'s, so the call-target interfaces are written here. Additive:
+    // a run that produced code still succeeds if they cannot be written.
+    private void WriteJavaCallTargetContracts(string outputFolder)
+    {
+        try
+        {
+            var written = JavaProjectScaffold.WriteCallTargetContracts(
+                outputFolder, SourceCallTargets, ConversionNamespacePolicy.ForSharedTypes("Java"));
+            if (written.Count > 0)
+                _logger.LogInformation("Wrote {Count} call-target interface(s) read from the COBOL", written.Count);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning("Could not write call-target interfaces: {Message}", ex.Message);
+        }
     }
 
     // The compile gate rewrites files on disk; the report and parity pass read the in-memory copies.

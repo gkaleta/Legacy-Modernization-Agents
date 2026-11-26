@@ -249,4 +249,46 @@ public sealed class CallTargetRegistryTests : IDisposable
         registry.ToPromptBlock("CALLER.cbl", "C#").Should().Contain("IExtService — one method");
         registry.ToPromptBlock("CALLER.cpy", "C#").Should().BeEmpty();
     }
+    // CICS programs mostly reach each other with EXEC CICS LINK, not CALL. Without a contract each
+    // file named the callee its own way (AbndprocService in callers, Abndproc in the callee).
+    [Fact]
+    public void ACicsLinkIsACall_ByLiteralOrByADataNameWithAValue()
+    {
+        File.WriteAllText(Path.Join(_root, "MENU.cbl"),
+            "       WORKING-STORAGE SECTION.\n" +
+            "       01 WS-ABEND-PGM                 PIC X(8) VALUE 'ABNDPROC'.\n" +
+            "       01 WS-LATER                     PIC X(8).\n" +
+            "       PROCEDURE DIVISION.\n" +
+            "           EXEC CICS LINK\n" +
+            "                     PROGRAM('INQCUST ')\n" +
+            "                     COMMAREA(WS-AREA)\n" +
+            "           END-EXEC\n" +
+            "           EXEC CICS LINK COMMAREA(WS-AREA) PROGRAM(WS-ABEND-PGM) END-EXEC\n" +
+            "           EXEC CICS LINK PROGRAM(WS-LATER) END-EXEC\n" +
+            "           EXEC CICS ASSIGN PROGRAM(WS-LATER) END-EXEC\n" +
+            "      *    EXEC CICS LINK PROGRAM('GHOST') END-EXEC\n");
+        Program("INQCUST");
+
+        var contracts = Build().Contracts;
+
+        contracts.Select(c => c.Target).Should().BeEquivalentTo("INQCUST", "ABNDPROC");
+        contracts.Single(c => c.Target == "INQCUST").DeclaredBy.Should().Be("INQCUST");
+        contracts.Should().OnlyContain(c => c.Callers.SequenceEqual(new[] { "MENU" }));
+    }
+    [Fact]
+    public void AnInlineCommareaTakesTheTypeEveryLinkPasses()
+    {
+        File.WriteAllText(Path.Join(_root, "ABEND.cbl"),
+            "       LINKAGE SECTION.\n       01 DFHCOMMAREA.\n          03 COMM-CODE PIC X(4).\n       PROCEDURE DIVISION USING DFHCOMMAREA.\n");
+        foreach (var caller in new[] { "ONE", "TWO" })
+            File.WriteAllText(Path.Join(_root, caller + ".cbl"),
+                "       WORKING-STORAGE SECTION.\n       01 ABNDINFO-REC.\n           COPY ABNDINFO.\n" +
+                "       PROCEDURE DIVISION.\n           EXEC CICS LINK PROGRAM('ABEND')\n               COMMAREA(ABNDINFO-REC) END-EXEC\n");
+
+        Build().Contracts.Single().Parameters.Should().Equal(new CallParameter("DFHCOMMAREA", "dfhcommarea", "Abndinfo"));
+
+        File.WriteAllText(Path.Join(_root, "TWO.cbl"),
+            "       PROCEDURE DIVISION.\n           EXEC CICS LINK PROGRAM('ABEND')\n               COMMAREA(WS-OTHER) END-EXEC\n");
+        Build().Contracts.Single().Parameters.Single().TypeName.Should().BeNull();
+    }
 }

@@ -264,7 +264,7 @@ REFERENCE these and do NOT declare them (another program declares them):
     string image, convert around the call:
       var area = T.FromImage(image); await x.ExecuteAsync(area, …); image = area.ToImage();
   • Inject the interface (Java: @Inject; C#: constructor injection) and call its method at
-    the point where the COBOL CALL appears.
+    the point where the COBOL CALL or EXEC CICS LINK appears.
   • Do NOT inline the called program's logic.
 
 ## SECTION: NamespacePolicy

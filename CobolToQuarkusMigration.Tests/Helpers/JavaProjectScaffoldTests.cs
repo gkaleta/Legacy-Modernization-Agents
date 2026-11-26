@@ -145,4 +145,32 @@ public sealed class JavaProjectScaffoldTests : IDisposable
 
         File.ReadAllText(Path.Join(_run, "pom.xml")).Should().Contain("jakarta.inject-api");
     }
+    // A Java program told to declare a callee's interface could only nest it in its own class, where
+    // the other callers could not see it. The interface is now written from the COBOL, once.
+    [Fact]
+    public void CallTargetInterfacesAreWrittenOnceAndImportedWhereUsed()
+    {
+        var source = Path.Join(_run, "cobol");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Join(source, "CALLER.cbl"),
+            "       PROCEDURE DIVISION.\n           EXEC CICS LINK PROGRAM('INQCUST') END-EXEC\n");
+        File.WriteAllText(Path.Join(source, "INQCUST.cbl"),
+            "       LINKAGE SECTION.\n       01 DFHCOMMAREA.\n          COPY INQCUSTZ.\n       PROCEDURE DIVISION USING DFHCOMMAREA.\n");
+        var registry = CallTargetRegistry.Build(source);
+        Write("com/m/app/Caller.java",
+            "package com.m.app;\n\npublic class Caller {\n    private final IInqcustService inqcust = null;\n\n" +
+            "    @FunctionalInterface\n    public static interface IInqcustService {\n        void run(String area);\n    }\n}\n");
+        Write("com/m/app/IInqcustService.java", "package com.m.app;\n\npublic interface IInqcustService {\n    void go();\n}\n");
+
+        var written = JavaProjectScaffold.WriteCallTargetContracts(_run, registry, "com.m.shared");
+
+        written.Should().ContainSingle().Which.Should().EndWith(Path.Join("shared", "IInqcustService.java"));
+        File.ReadAllText(written[0]).Should().Contain("package com.m.shared;")
+            .And.Contain("void ExecuteAsync(Inqcustz dfhcommarea);");
+        var caller = File.ReadAllText(Path.Join(_run, "com/m/app/Caller.java"));
+        caller.Should().Contain("import com.m.shared.IInqcustService;")
+            .And.NotContain("interface IInqcustService").And.NotContain("@FunctionalInterface")
+            .And.Contain("private final IInqcustService inqcust");
+        File.Exists(Path.Join(_run, "com/m/app/IInqcustService.java")).Should().BeFalse();
+    }
 }

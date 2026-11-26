@@ -57,6 +57,16 @@ public sealed class CallTargetRegistry
         @"\bCALL\s+['""]([A-Za-z][A-Za-z0-9_-]*)['""]",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // EXEC CICS LINK runs another program and returns, so it is a call like CALL. PROGRAM may name
+    // the program as a literal or through a data name; the data name is resolved by its VALUE clause.
+    // One that is only set at run time cannot be resolved and is left alone.
+    private static readonly Regex CicsLink = new(
+        @"\bEXEC\s+CICS\s+LINK\b(?<options>.*?)\bEND-EXEC\b", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+    private static readonly Regex LinkProgram = new(
+        @"\bPROGRAM\s*\(\s*(?:['""](?<literal>[A-Za-z][A-Za-z0-9_-]*)\s*['""]|(?<data>[A-Za-z][A-Za-z0-9-]*))\s*\)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly Dictionary<string, CallTargetContract> _byTarget =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -121,7 +131,8 @@ public sealed class CallTargetRegistry
                     CallerPrograms = byPrograms,
                     CallerCopybooks = byCopybooks,
                     Parameters = programs.TryGetValue(target, out var source)
-                        ? UsingParameters(source)
+                        ? TypedByCallers(UsingParameters(source), target,
+                            orderedPrograms.Select(c => programs[c]), recordTypes)
                         : AgreedCallSiteParameters(
                             target,
                             orderedPrograms.Select(c => programs[c]).Concat(orderedCopybooks.Select(c => copybooks[c])),
@@ -135,15 +146,36 @@ public sealed class CallTargetRegistry
         return registry;
     }
 
+    private static IReadOnlyList<CallParameter> TypedByCallers(
+        IReadOnlyList<CallParameter> parameters, string target, IEnumerable<string> callerTexts,
+        IReadOnlyDictionary<string, string> recordTypes)
+    {
+        if (parameters.Count != 1 || parameters[0].TypeName is not null
+            || !parameters[0].CobolName.Equals("DFHCOMMAREA", StringComparison.OrdinalIgnoreCase))
+            return parameters;
+        var type = AgreedLinkCommareaType(target, callerTexts, recordTypes);
+        return type is null ? parameters : [parameters[0] with { TypeName = type }];
+    }
+
+    private static readonly Regex ProcedureDivision = new(
+        @"\bPROCEDURE\s+DIVISION\s*\.", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CommareaRecord = new(
+        @"(?:^|\s)01\s+DFHCOMMAREA\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex ProcedureUsing = new(
         @"\bPROCEDURE\s+DIVISION\s+USING\s+(?<args>[^.]*)\.", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex LinkageRecord = new(
-        @"(?:^|\s)01\s+(?<name>[A-Za-z0-9][A-Za-z0-9-]*)\s*\.(?<body>.*?)(?=\s01\s+[A-Za-z0-9]|\z)",
+        @"(?:^|\s)01\s+(?<name>[A-Za-z0-9][A-Za-z0-9-]*)\s*\.(?<body>.*?)(?=\s(?:01|77)\s+[A-Za-z0-9]|\s[A-Za-z0-9-]+\s+SECTION\s*\.|\sPROCEDURE\s+DIVISION\b|\z)",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
     private static readonly Regex OnlyACopy = new(
         @"^\s*COPY\s+[""']?(?<copybook>[A-Za-z0-9][A-Za-z0-9_-]*)[""']?[^.]*\.\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex CopyRenamingRecord = new(
+        @"\bCOPY\s+[""']?(?<copybook>[A-Za-z0-9][A-Za-z0-9_-]*)[""']?\s+REPLACING\s+[A-Za-z0-9][A-Za-z0-9-]*\s+BY\s+(?<name>[A-Za-z0-9][A-Za-z0-9-]*)\s*\.",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
@@ -154,13 +186,21 @@ public sealed class CallTargetRegistry
     {
         var code = CodeArea(programText);
         var procedure = ProcedureUsing.Match(code);
-        if (!procedure.Success) return [];
+        // A CICS program reaches its COMMAREA as DFHCOMMAREA without naming it in USING.
+        var implicitCommarea = !procedure.Success ? ProcedureDivision.Match(code) : null;
+        if (!procedure.Success && implicitCommarea is not { Success: true }) return [];
+        var procedureIndex = procedure.Success ? procedure.Index : implicitCommarea!.Index;
 
         var linkageStart = code.IndexOf("LINKAGE SECTION", StringComparison.OrdinalIgnoreCase);
-        var linkage = linkageStart < 0 ? "" : code[linkageStart..procedure.Index];
+        var linkage = linkageStart < 0 || linkageStart > procedureIndex ? "" : code[linkageStart..procedureIndex];
+        if (!procedure.Success && !CommareaRecord.IsMatch(linkage)) return [];
         var records = RecordsThatAreOnlyACopy(linkage);
+        // COPY X REPLACING <record> BY <parameter> makes the copybook's record the parameter.
+        foreach (Match renamed in CopyRenamingRecord.Matches(linkage))
+            records.TryAdd(renamed.Groups["name"].Value, ToPascalCase(renamed.Groups["copybook"].Value));
 
-        return Arguments(procedure.Groups["args"].Value)
+        var arguments = procedure.Success ? Arguments(procedure.Groups["args"].Value) : ["DFHCOMMAREA"];
+        return arguments
             .Select(a => Parameter(a, records.GetValueOrDefault(a)))
             .ToList();
     }
@@ -247,15 +287,29 @@ public sealed class CallTargetRegistry
             : l.Length > 7 ? l[7..Math.Min(l.Length, 72)]
             : ""));
 
-    // With the signature known, the C# interface is written with the build scaffolding rather than by a
-    // model: models told only to reference an interface were observed declaring it with another shape.
+    // With the signature known, the interface is written with the build scaffolding rather than by a
+    // model: models told only to reference an interface were observed declaring it with another shape,
+    // and a Java program told to declare one could only nest it in its own class, out of its callers' reach.
     public static bool IsGenerated(CallTargetContract contract, string targetLanguage) =>
-        contract.Parameters.Count > 0 && ConversionNamespacePolicy.IsCSharp(targetLanguage);
+        contract.Parameters.Count > 0;
 
     public IReadOnlyList<CallTargetContract> GeneratedInterfaces(string targetLanguage) => _byTarget.Values
         .Where(c => IsGenerated(c, targetLanguage))
         .OrderBy(c => c.InterfaceName, StringComparer.Ordinal)
         .ToList();
+
+    /// <summary>One Java source per generated interface, keyed by file name (Java allows one public type per file).</summary>
+    public IReadOnlyDictionary<string, string> RenderJavaInterfaces(string sharedPackage) =>
+        GeneratedInterfaces("Java").ToDictionary(
+            contract => contract.InterfaceName + ".java",
+            contract =>
+                "// Generated from the COBOL: the entry point of " + contract.Target + ".\n" +
+                "// Regenerated with the build scaffolding; declarations of this name elsewhere are removed.\n" +
+                $"package {sharedPackage};\n\n" +
+                $"public interface {contract.InterfaceName} {{\n" +
+                $"    {Signature(contract, "Java")};\n" +
+                "}\n",
+            StringComparer.Ordinal);
 
     public string RenderCSharpInterfaces(string sharedNamespace)
     {
@@ -372,15 +426,68 @@ public sealed class CallTargetRegistry
 
     private static Dictionary<string, HashSet<string>> CallersByTarget(Dictionary<string, string> files) =>
         files
-            .SelectMany(file => CallDirective
-                .Matches(StripComments(file.Value))
-                .Select(match => (Target: match.Groups[1].Value, Caller: file.Key)))
+            .SelectMany(file => Targets(file.Value).Select(target => (Target: target, Caller: file.Key)))
             .Where(edge => !string.Equals(edge.Target, edge.Caller, StringComparison.OrdinalIgnoreCase))
             .GroupBy(edge => edge.Target, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => group.Select(e => e.Caller).ToHashSet(StringComparer.OrdinalIgnoreCase),
                 StringComparer.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> Targets(string text)
+    {
+        foreach (Match call in CallDirective.Matches(StripComments(text)))
+            yield return call.Groups[1].Value;
+        foreach (var link in LinkSites(CodeArea(text)))
+            yield return link.Target;
+    }
+
+    private static readonly Regex LinkCommarea = new(
+        @"\bCOMMAREA\s*\(\s*(?<name>[A-Za-z][A-Za-z0-9-]*)\s*\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static IEnumerable<(string Target, string? Commarea)> LinkSites(string code)
+    {
+        foreach (Match link in CicsLink.Matches(code))
+        {
+            var options = link.Groups["options"].Value;
+            var program = LinkProgram.Match(options);
+            if (!program.Success) continue;
+            var target = program.Groups["literal"].Success
+                ? program.Groups["literal"].Value
+                : ValueOf(code, program.Groups["data"].Value);
+            var commarea = LinkCommarea.Match(options);
+            if (target is not null) yield return (target, commarea.Success ? commarea.Groups["name"].Value : null);
+        }
+    }
+
+    // A callee whose COMMAREA is written out inline has no type of its own. When every LINK to it
+    // passes a record of the same copybook, that copybook is the type both sides agree on.
+    private static string? AgreedLinkCommareaType(
+        string target, IEnumerable<string> callerTexts, IReadOnlyDictionary<string, string> recordTypes)
+    {
+        string? agreed = null;
+        foreach (var text in callerTexts)
+        {
+            var code = CodeArea(text);
+            var local = RecordsThatAreOnlyACopy(code);
+            foreach (var site in LinkSites(code).Where(l => l.Target.Equals(target, StringComparison.OrdinalIgnoreCase)))
+            {
+                var type = site.Commarea is null ? null
+                    : local.GetValueOrDefault(site.Commarea) ?? recordTypes.GetValueOrDefault(site.Commarea);
+                if (type is null || (agreed is not null && agreed != type)) return null;
+                agreed = type;
+            }
+        }
+        return agreed;
+    }
+
+    private static string? ValueOf(string code, string dataName)
+    {
+        var declared = Regex.Match(code,
+            @"(?:^|\s)\d{1,2}\s+" + Regex.Escape(dataName) + @"\s+PIC(?:TURE)?\s+[^.]*?\bVALUE\s+['""](?<name>[A-Za-z][A-Za-z0-9_-]*)\s*['""]",
+            RegexOptions.IgnoreCase);
+        return declared.Success ? declared.Groups["name"].Value : null;
+    }
 
     private static string Stem(string path) =>
         Path.GetFileNameWithoutExtension(Path.GetFileName(path));
