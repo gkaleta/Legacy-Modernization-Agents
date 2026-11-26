@@ -89,15 +89,20 @@ public static class JavaCompileGate
                         logger.LogWarning(ex, "Compiler repair failed for {File}; retaining original output.", group.Key);
                         continue;
                     }
-                    if (candidate is null || candidate.Count != 1 || !candidate.TryGetValue(path, out var after)
-                        || string.IsNullOrWhiteSpace(after) || before == after
-                        || RejectCandidate(before, after, preserveAllTypes: true) is not null)
+                    var after = candidate is not null && candidate.Count == 1 && candidate.TryGetValue(path, out var proposed)
+                        ? proposed : null;
+                    var rejection = candidate is null ? "no candidate returned"
+                        : after is null ? $"answer named {candidate.Count} file(s) but not this one"
+                        : string.IsNullOrWhiteSpace(after) ? "empty candidate"
+                        : before == after ? "candidate unchanged"
+                        : RejectCandidate(before, after, preserveAllTypes: true);
+                    if (rejection is not null)
                     {
-                        logger.LogWarning("Compiler repair rejected for {File}: absent candidate or changed public identity.", group.Key);
+                        logger.LogWarning("Compiler repair rejected for {File}: {Reason}.", group.Key, rejection);
                         continue;
                     }
                     originals[path] = before;
-                    candidates[path] = after;
+                    candidates[path] = after!;
                 }
                 if (originals.Count == 0) break;
                 JavaCompileResult measured;

@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Converting one estate after parsing all of `source/`** - `convert-only --source source/<estate>` stopped at the dependency evidence gate with "missing dependency-evidence.json" for every program. The parse had stored the evidence under the estate path relative to `source/`. The conversion, and the portal's readiness check, now find that evidence, run from `source/` and convert only that estate's programs and JCL jobs.
 - **Starforge tests on Windows** - The model-diff and platform-contract tests compare output with `\n` line endings, as the CLI tests already did.
 - **Spring step label** - A Java Spring Boot conversion's step line said "Converting to Java Quarkus microservices". It now names Spring Boot.
+- **Compiler repair says why it rejected a fix** - The warning said "absent candidate or changed public identity" in every case. It now gives the reason: no candidate, wrong file, unchanged, or which declarations were lost.
 - **Status emoji on Windows** - The CLI writes UTF-8. Redirected output on Windows (Git Bash, logs) showed `⚠️` and other status marks as `??`.
 - **Docker image restores the Starforge projects** - The `Dockerfile` now copies the five `Parser/` project files before `dotnet restore`. The solution lists them, so restore failed without them.
 - **`teach-parser` starts quietly** - The command no longer prints the target language, Copilot sign-in and configuration banner lines or info logs before its own output.
