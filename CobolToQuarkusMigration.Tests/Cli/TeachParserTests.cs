@@ -144,6 +144,33 @@ public sealed class TeachParserTests : IDisposable
             .And.NotContain("ORDERS");
     }
 
+    [Fact]
+    public async Task AStatementWordAfterAnUnendedStatementIsNamedByItsPlaceholder()
+    {
+        Write("cobol/TRC.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. TRC."), A("DATA DIVISION."), A("WORKING-STORAGE SECTION."),
+            A("01  WS-A PIC X."), A("PROCEDURE DIVISION."), B("MOVE 'B' TO WS-A"), B("XTRACE 'SECRET' WS-A."), B("GOBACK."));
+
+        var (output, client, _) = await Run("y\nu\ny\n",
+            """{"category":"dialect-rule","explanation":"Site trace.","rule":{"kind":"statement","end":"period","word":"W2"}}""");
+
+        client.Prompts.Should().ContainSingle().Which.Should().Contain("W2 '...' W1.").And.NotContainAny("XTRACE", "SECRET");
+        output.Should().Contain("Fixes 1 of 1 place(s).").And.Contain("It read every place in every program.");
+        TeachParserCommand.LoadRules(_rulesPath).Rules.Should().ContainSingle()
+            .Which.Should().Match<DialectRule>(r => r.Kind == DialectRuleKind.Statement && r.Word == "XTRACE" && r.Id == "stmt-xtrace");
+    }
+
+    [Theory]
+    [InlineData("W9")]
+    [InlineData("PERFORM")]
+    [InlineData(null)]
+    public void ARuleWordMustComeFromTheExcerpt(string? word)
+    {
+        var group = new TeachGroup("expected-statement", "'...'", [new TeachSite("est/cobol/TRC.cbl", "est/cobol/TRC.cbl", 8, 19, "expected-statement", "'...'")]);
+        var answer = new TeachAnswer("dialect-rule", "x", "statement", "period", word);
+
+        TeachParser.Candidate(group, answer, DialectRules.Empty, new Dictionary<string, string> { ["WS-A"] = "W1", ["XTRACE"] = "W2" }).Should().BeNull();
+    }
+
     [Theory]
     [InlineData("Sure! ```json\n{\"category\":\"parser-gap\",\"explanation\":\"x\"}\n```", "parser-gap")]
     [InlineData("{\"category\":\"dialect-rule\",\"explanation\":\"x\",\"rule\":{\"kind\":\"statement\",\"end\":\"END-XTRACE\"}}", "dialect-rule")]

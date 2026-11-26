@@ -56,7 +56,8 @@ internal sealed partial class Parser
             return IsWord(i + 1, "OF");
         }
 
-        return !IsReserved(w);
+        // A taught site verb starts a statement, so it also ends a list of names before it (MOVE … TO A without a period).
+        return !IsReserved(w) && _rules?.Statement(w) is null;
     }
 
     private bool IsOperandStart(int i)

@@ -88,6 +88,20 @@ public sealed class DialectRulesTests : IDisposable
         r.TaughtUses.Should().BeEmpty();
     }
 
+    [Fact]
+    public void ATaughtStatementIsNotReadAsAReceivingItem()
+    {
+        var lines = Procedure(B("MOVE 'B' TO WS-A"), B("XTRACE 'X' WS-A."));
+        Process(null, lines).UnreadableSource().Should().NotBeEmpty();
+
+        var r = Process(Statement("period"), lines);
+
+        r.UnreadableSource().Should().BeEmpty();
+        var statements = r.Syntax.Programs[0].Procedure!.AllStatements().ToList();
+        statements.OfType<MoveStatement>().Should().ContainSingle().Which.Targets.Should().ContainSingle();
+        statements.OfType<TaughtStatement>().Should().ContainSingle();
+    }
+
     [Theory]
     [InlineData("""{"version":1,"rules":[{"id":"m","kind":"statement","word":"MOVE","end":"period"}]}""", "MOVE is a word Starforge already reads")]
     [InlineData("""{"version":1,"rules":[{"id":"n","kind":"notProgram","paths":["est/*.cbl"]}]}""", "must be an exact path")]

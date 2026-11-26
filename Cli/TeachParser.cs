@@ -9,7 +9,7 @@ namespace CobolToQuarkusMigration.Cli;
 // The customer's own AI endpoint, described before anything is sent and created only after consent.
 public sealed record TeachAiEndpoint(string Service, string Endpoint, string Model, Func<IChatClient> CreateClient);
 
-public sealed record TeachAnswer(string Category, string Explanation, string? RuleKind, string? End);
+public sealed record TeachAnswer(string Category, string Explanation, string? RuleKind, string? End, string? Word = null);
 
 // Teaches Starforge the site's own COBOL words. The AI only classifies a pseudonymised excerpt; the rule itself is
 // built from what Starforge found, checked by reading the whole estate again, and saved only when the person agrees.
@@ -76,7 +76,8 @@ public sealed class TeachParser(TextReader input, TextWriter output)
             {
                 visited.Add(group.Key);
                 var site = group.Sites[0];
-                var excerpt = scan.Excerpt(site);
+                var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var excerpt = scan.Excerpt(site, names);
                 var missing = scan.Programs.Where(p => group.Programs.Contains(p.Program) && p.MissingCopybooks.Count > 0).ToList();
                 var prompt = UserPrompt(group, excerpt, missing.Count > 0);
 
@@ -123,7 +124,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                 }
 
                 output.WriteLine($"   Your AI says: {answer.Category}. {answer.Explanation}");
-                if (Candidate(group, answer, scan.Rules) is not { } rule)
+                if (Candidate(group, answer, scan.Rules, names) is not { } rule)
                 {
                     output.WriteLine(NoRuleAdvice(answer, missing));
                     continue;
@@ -271,7 +272,9 @@ public sealed class TeachParser(TextReader input, TextWriter output)
         - dialect-rule: a site or vendor extension, not standard COBOL, such as a preprocessor include word or a
           site statement. rule is {"kind":"copyAlias"} when the word includes a member the way COPY does, or
           {"kind":"statement","end":"period"} / {"kind":"statement","end":"END-<WORD>"} when the word starts a
-          statement; end says where that statement stops.
+          statement; end says where that statement stops. When that word is not the word at the place (for
+          example an earlier statement without a period ran into it), add "word" with the word as it appears in
+          the excerpt, such as "W2".
         - source-error: the code is wrong (typo, missing quote, misplaced text) and would not compile.
         - not-cobol: the file is not a COBOL program (data, JCL, a listing, a definitions file).
         - missing-copybook: the problem comes from a copybook that was not found.
@@ -316,14 +319,15 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                 explanation = explanation[..400] + "…";
             }
 
-            string? kind = null, ruleEnd = null;
+            string? kind = null, ruleEnd = null, word = null;
             if (root.TryGetProperty("rule", out var rule) && rule.ValueKind == JsonValueKind.Object)
             {
                 kind = Str(rule, "kind");
                 ruleEnd = Str(rule, "end");
+                word = Str(rule, "word");
             }
 
-            return new TeachAnswer(category, explanation, kind, ruleEnd);
+            return new TeachAnswer(category, explanation, kind, ruleEnd, word);
         }
         catch (JsonException ex)
         {
@@ -335,20 +339,35 @@ public sealed class TeachParser(TextReader input, TextWriter output)
     }
 
     // The rule comes from what Starforge found (the word, the files); the AI only chooses the kind and the end.
-    internal static DialectRule? Candidate(TeachGroup group, TeachAnswer answer, DialectRules existing)
+    // When the place is not where the site word stands (MOVE … TO A without a period, then the site word), the AI may
+    // point at the word by its placeholder; it is traced back to a name from this excerpt, never taken as free text.
+    internal static DialectRule? Candidate(TeachGroup group, TeachAnswer answer, DialectRules existing,
+        IReadOnlyDictionary<string, string>? names = null)
     {
         var reason = answer.Explanation.Length > 200 ? answer.Explanation[..200] + "…" : answer.Explanation;
+        var word = RuleWord(group, answer, names);
         DialectRule? rule = answer switch
         {
             { Category: "not-cobol" } when group.WholeFile => new DialectRule("not-programs", DialectRuleKind.NotProgram, Paths: group.Programs, Reason: reason),
-            { Category: "dialect-rule", RuleKind: "copyAlias" } when group.Word.Length > 0
-                => new DialectRule("copy-" + Slug(group.Word), DialectRuleKind.CopyAlias, group.Word, Reason: reason),
-            { Category: "dialect-rule", RuleKind: "statement" } when group.Word.Length > 0
-                => new DialectRule("stmt-" + Slug(group.Word), DialectRuleKind.Statement, group.Word,
+            { Category: "dialect-rule", RuleKind: "copyAlias" } when word.Length > 0
+                => new DialectRule("copy-" + Slug(word), DialectRuleKind.CopyAlias, word, Reason: reason),
+            { Category: "dialect-rule", RuleKind: "statement" } when word.Length > 0
+                => new DialectRule("stmt-" + Slug(word), DialectRuleKind.Statement, word,
                     string.IsNullOrWhiteSpace(answer.End) ? DialectRule.PeriodEnd : answer.End.Trim(), Reason: reason),
             _ => null,
         };
         return rule is null ? null : rule with { Id = UniqueId(rule.Id, existing) };
+    }
+
+    private static string RuleWord(TeachGroup group, TeachAnswer answer, IReadOnlyDictionary<string, string>? names)
+    {
+        var named = answer.Word?.Trim();
+        if (string.IsNullOrEmpty(named) || named.Equals(group.Word, StringComparison.OrdinalIgnoreCase))
+        {
+            return group.Word.Contains('\'') || group.Word.Contains('"') ? string.Empty : group.Word;
+        }
+
+        return names?.FirstOrDefault(n => n.Value.Equals(named, StringComparison.OrdinalIgnoreCase)).Key?.ToUpperInvariant() ?? string.Empty;
     }
 
     private string NoRuleAdvice(TeachAnswer answer, IReadOnlyList<TeachProgram> missing) => answer.Category switch
@@ -359,6 +378,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
             : "   Add the missing copybook(s) to the estate and scan again.",
         "not-cobol" => "   Only files that fail at their very first line can be marked as not programs; this one reads partly as COBOL. Nothing saved.",
         "parser-gap" => $"   This looks like standard COBOL that Starforge should read. Nothing saved; please tell us at {IssuesUrl} (describe the construct, do not paste your code).",
+        "dialect-rule" => "   The AI did not point at a word from this place that a rule can name. Nothing saved.",
         _ => "   The answer did not include a rule Starforge can use. Nothing saved.",
     };
 

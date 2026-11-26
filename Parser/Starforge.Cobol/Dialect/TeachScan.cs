@@ -112,7 +112,10 @@ public sealed class TeachScan
 
     // The lines around one place, with every name the site chose replaced by W1, W2, …, literal contents and
     // comments removed. COBOL words, numbers, picture strings and the unknown word itself are kept.
-    public string Excerpt(TeachSite site, int context = 3)
+    public string Excerpt(TeachSite site, int context = 3) => Excerpt(site, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), context);
+
+    // names receives each replaced name and its placeholder, so an answer naming W2 can be traced back locally.
+    public string Excerpt(TeachSite site, Dictionary<string, string> names, int context = 3)
     {
         var result = new CobolFrontEnd(new FrontEndOptions(_roots, Rules: Rules)).Process(_programPaths[site.Program]);
         var unit = result.Units.FirstOrDefault(u => _display.Show(u.Source.Path) == site.File);
@@ -121,7 +124,6 @@ public sealed class TeachScan
             return string.Empty;
         }
 
-        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var sb = new StringBuilder();
         foreach (var line in unit.Source.Lines.Where(l => l.Number >= site.Line - context && l.Number <= site.Line + context))
         {
@@ -252,7 +254,10 @@ public sealed class TeachScan
             end++;
         }
 
-        return text[i..end].TrimEnd('.').ToUpperInvariant();
+        var word = text[i..end].TrimEnd('.');
+        // Literal contents never leave the machine and never name a rule; keep only the prefix (X, N, …) and the quote.
+        var quote = word.IndexOfAny(['\'', '"']);
+        return quote < 0 ? word.ToUpperInvariant() : word[..quote].ToUpperInvariant() + word[quote] + "..." + word[quote];
     }
 }
 

@@ -41,9 +41,12 @@ For each group of places with the same problem and word:
    | `parser-gap` | Valid standard COBOL that Starforge should read | No rule; report it to the Starforge team |
 
 4. Starforge builds the rule from what it found itself (the word and the files); the
-   AI only chooses the kind and where a statement ends. It then reads the whole estate
-   again with the rule. A rule is offered only when it fixes **every** place in the
-   group and changes nothing else.
+   AI only chooses the kind and where a statement ends. Sometimes the problem shows up
+   just after the site word, for example when a `MOVE … TO X` without a period runs
+   into it. Then the AI may point at the word by its placeholder (`W2`). Starforge maps
+   it back to the real word on your machine, and only to a name from that excerpt.
+   Starforge then reads the whole estate again with the rule. A rule is offered only
+   when it fixes **every** place in the group and changes nothing else.
 5. For a site statement, you are asked whether it can change data or decide what runs
    next. Answer `n` only if you are sure it does neither. Otherwise it is kept as
    *effects unknown*, and programs that use it stay Partial in the dependency evidence.
