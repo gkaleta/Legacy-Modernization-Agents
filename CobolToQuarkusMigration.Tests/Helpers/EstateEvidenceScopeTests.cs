@@ -38,6 +38,23 @@ public sealed class EstateEvidenceScopeTests : IDisposable
         files.Select(file => file.FilePath).Should().OnlyContain(path => path.StartsWith(Estate));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("/jcl/elsewhere")]
+    public void TheRunMovesToTheParentButReadsJclFromTheEstateOnly(string? configuredJcl)
+    {
+        Source("bank/cobol/MAIN.cbl");
+        DependencyEvidenceFixture.Write(_root, SourceRoot, "bank/cobol/MAIN.cbl");
+        var settings = new AppSettings();
+        settings.ApplicationSettings.CobolSourceFolder = Estate;
+        settings.JclJobs.SourceFolder = configuredJcl;
+
+        EstateEvidenceScope.Resolve(Estate, FactsRoot, null).ApplyTo(settings);
+
+        settings.ApplicationSettings.CobolSourceFolder.Should().Be(SourceRoot);
+        settings.JclJobs.SourceFolder.Should().Be(configuredJcl ?? Estate);
+    }
+
     [Fact]
     public void ANameSelectionStaysInsideTheEstate_AndAnUnknownNameIsPassedOn()
     {

@@ -15,6 +15,18 @@ public sealed record EstateEvidenceScope(string SourceRoot, IReadOnlyList<string
 {
     public bool Widened => Estate is not null;
 
+    /// <summary>
+    /// Moves the run to the parsed folder. JCL is still read from the estate alone:
+    /// the parsed folder holds other estates' jobs too.
+    /// </summary>
+    public void ApplyTo(AppSettings settings)
+    {
+        if (!Widened) return;
+        if (string.IsNullOrWhiteSpace(settings.JclJobs.SourceFolder))
+            settings.JclJobs.SourceFolder = Path.GetFullPath(Path.Join(SourceRoot, Estate));
+        settings.ApplicationSettings.CobolSourceFolder = SourceRoot;
+    }
+
     public static EstateEvidenceScope Resolve(string sourceRoot, string factsDirectory, IReadOnlyList<string>? selection)
     {
         var root = Path.GetFullPath(sourceRoot);

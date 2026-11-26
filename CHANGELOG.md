@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Converting one estate after parsing all of `source/`** - `convert-only --source source/<estate>` stopped at the dependency evidence gate with "missing dependency-evidence.json" for every program. The parse had stored the evidence under the estate path relative to `source/`. The conversion, and the portal's readiness check, now find that evidence, run from `source/` and convert only that estate's programs.
+- **Converting one estate after parsing all of `source/`** - `convert-only --source source/<estate>` stopped at the dependency evidence gate with "missing dependency-evidence.json" for every program. The parse had stored the evidence under the estate path relative to `source/`. The conversion, and the portal's readiness check, now find that evidence, run from `source/` and convert only that estate's programs and JCL jobs.
 - **Starforge tests on Windows** - The model-diff and platform-contract tests compare output with `\n` line endings, as the CLI tests already did.
 - **Spring step label** - A Java Spring Boot conversion's step line said "Converting to Java Quarkus microservices". It now names Spring Boot.
 - **Status emoji on Windows** - The CLI writes UTF-8. Redirected output on Windows (Git Bash, logs) showed `⚠️` and other status marks as `??`.

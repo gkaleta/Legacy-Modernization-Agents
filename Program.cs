@@ -621,7 +621,7 @@ internal static class Program
                 {
                     Console.WriteLine($"📂 {scope.Estate} was parsed together with the rest of {scope.SourceRoot}; " +
                         "converting its programs from there so they match the parser's evidence.");
-                    settings.ApplicationSettings.CobolSourceFolder = scope.SourceRoot;
+                    scope.ApplyTo(settings);
                     programSelection = scope.Selection;
                 }
             }

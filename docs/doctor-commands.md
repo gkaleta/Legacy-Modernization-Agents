@@ -187,7 +187,7 @@ Then convert, either everything or a selection:
 
 `--program` takes the program name, or its path relative to `source/` when two programs share a name. It can be repeated or comma-separated. `--include-callees` also converts every program the selection CALLs. Copybooks are always carried in by the programs that COPY them. The [Convert Programs](portal.md#convert-programs) tab and the [Estate Mission Control](portal.md#estate-mission-control) build these commands for you.
 
-`--source source/<estate>` converts one estate. If `rekt-parse` read the whole `source/` folder, the parser evidence is stored per estate path. The conversion then runs from `source/`, restricted to that estate's programs, and says so with a `📂` line. You do not need to parse the estate again on its own.
+`--source source/<estate>` converts one estate. If `rekt-parse` read the whole `source/` folder, the parser evidence is stored per estate path. The conversion then runs from `source/`, restricted to that estate's programs and JCL, and says so with a `📂` line. You do not need to parse the estate again on its own.
 
 ## JCL
 
