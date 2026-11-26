@@ -291,4 +291,16 @@ public sealed class CallTargetRegistryTests : IDisposable
             "       PROCEDURE DIVISION.\n           EXEC CICS LINK PROGRAM('ABEND')\n               COMMAREA(WS-OTHER) END-EXEC\n");
         Build().Contracts.Single().Parameters.Single().TypeName.Should().BeNull();
     }
+    // A Java conversion writes one file. Told to declare an unsigned interface "in the shared
+    // package", the only caller imported it from there and the file never existed.
+    [Fact]
+    public void AJavaInterfaceOnlyItsDeclarerCallsIsNestedInItsOwnClass()
+    {
+        Program("LOADER", "CLOCKSVC");
+
+        var registry = Build();
+
+        registry.ToPromptBlock("LOADER.cbl", "Java").Should().Contain("nested in your own class");
+        registry.ToPromptBlock("LOADER.cbl", "C#").Should().NotContain("nested in your own class");
+    }
 }

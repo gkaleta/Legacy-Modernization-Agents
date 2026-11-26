@@ -332,6 +332,9 @@ public sealed class CallTargetRegistry
         return sb.ToString();
     }
 
+    private static bool OnlyCalledByItsDeclarer(CallTargetContract contract) =>
+        contract.Callers.All(c => c.Equals(contract.DeclaredBy, StringComparison.OrdinalIgnoreCase));
+
     private static string Signature(CallTargetContract contract, string targetLanguage)
     {
         var cs = ConversionNamespacePolicy.IsCSharp(targetLanguage);
@@ -382,6 +385,12 @@ public sealed class CallTargetRegistry
                     $"  • {contract.InterfaceName} — one method, {contract.MethodName}, "
                     + $"for the single entry point of {contract.Target}. "
                     + $"Called by {contract.Callers.Count} program(s).");
+                // A Java conversion is one file with one top-level type, so an interface "in the shared
+                // package" was imported from there but never written. Only this program uses it.
+                if (!ConversionNamespacePolicy.IsCSharp(targetLanguage) && OnlyCalledByItsDeclarer(contract))
+                    declares.AppendLine(
+                        $"      Only this program calls it: declare it as a public static interface nested in "
+                        + "your own class, not in the shared package, and do not import it.");
                 if (contract.Parameters.Count > 0)
                     declares.AppendLine($"      {Signature(contract, targetLanguage)}");
             }
