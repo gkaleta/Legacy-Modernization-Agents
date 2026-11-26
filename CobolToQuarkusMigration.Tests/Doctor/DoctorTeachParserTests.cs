@@ -41,7 +41,7 @@ public sealed class DoctorTeachParserTests : IDisposable
         result.ShouldSucceed();
         var call = TeachCall();
         call.Contains("--review").Should().Be(review);
-        DoctorFixture.After(call, "--source").Should().Contain("/source");
+        DoctorFixture.After(call, "--source").Replace('\\', '/').Should().EndWith("/source");
         result.StdErr.Contains("STARFORGE_TEACH='sometimes' is not auto, review or off").Should().Be(warns);
     }
 

@@ -78,7 +78,7 @@ public abstract class RektEvidenceFixture : IDisposable
 
     protected string Write(string relative, string text)
     {
-        var path = Path.Join(Source, relative);
+        var path = Path.GetFullPath(Path.Join(Source, relative));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, Encoding.Latin1.GetBytes(text));
         return path;

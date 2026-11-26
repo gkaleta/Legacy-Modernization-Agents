@@ -29,6 +29,7 @@ internal static class Program
     public static async Task<int> Main(string[] args)
     {
         QuietStartup = args.FirstOrDefault(a => !a.StartsWith('-')) is "teach-parser";
+        UseUtf8Output();
         // Start live log capture for portal's Live Run Log panel
         var logsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "Logs");
 
@@ -1460,6 +1461,13 @@ internal static class Program
 
     // The live log is the portal's view of a conversion run. Offline helpers (program-facts,
     // jcl-facts, …) run during scans and must neither truncate it nor print its header.
+    // Windows writes redirected output in the OEM code page, which turns the status emoji into "??" in Git Bash and logs.
+    private static void UseUtf8Output()
+    {
+        try { Console.OutputEncoding = new System.Text.UTF8Encoding(false); }
+        catch (IOException) { }
+    }
+
     internal static bool CapturesLiveLog(string[] args) =>
         RequiresAiSettings(args) && args.FirstOrDefault(a => !a.StartsWith('-')) is not ("mcp" or "teach-parser");
 

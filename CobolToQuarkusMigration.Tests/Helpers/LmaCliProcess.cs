@@ -13,6 +13,8 @@ internal static class LmaCliProcess
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
             // An empty working directory keeps a developer's Config/ and Logs/ out of the result.
             WorkingDirectory = Directory.CreateDirectory(workingDirectory).FullName,
         };
