@@ -134,6 +134,41 @@ public sealed class JavaCompileGateTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_RevertsACandidateThatBreaksSyntax_AndKeepsTheOtherFixes()
+    {
+        // A syntax error stops javac before symbol checks, so a broken file would look like "1 error left".
+        var executable = await FakeMavenAsync(
+            "if grep -q SYNTAX A.java B.java; then printf \"[ERROR] B.java:[1,1] ';' expected\\n\"; exit 1; fi\n" +
+            "n=0\nfor f in A.java B.java; do if grep -q broken $f; then printf \"[ERROR] $f:[1,1] cannot find symbol: broken\\n\"; n=1; fi; done\nexit $n\n",
+            "findstr SYNTAX A.java B.java >nul\r\nif not errorlevel 1 (echo [ERROR] B.java:[1,1] ';' expected& exit /b 1)\r\n" +
+            "set n=0\r\nfindstr broken A.java >nul\r\nif not errorlevel 1 (echo [ERROR] A.java:[1,1] cannot find symbol: broken& set n=1)\r\n" +
+            "findstr broken B.java >nul\r\nif not errorlevel 1 (echo [ERROR] B.java:[1,1] cannot find symbol: broken& set n=1)\r\nexit /b %n%\r\n");
+        var files = new List<CodeFile>();
+        foreach (var name in new[] { "A", "B" })
+        {
+            var source = Path.Combine(_root, $"{name}.cbl");
+            await File.WriteAllTextAsync(source, "       PROCEDURE DIVISION.");
+            await File.WriteAllTextAsync(Path.Combine(_root, $"{name}.java"), $"public class {name} {{ int v = broken; }}");
+            files.Add(new CodeFile { FilePath = Path.Combine(_root, $"{name}.java"), OriginalSourcePath = source, OriginalCobolFileName = $"{name}.cbl" });
+        }
+        var fixedA = "public class A { int v = 1; }";
+
+        var result = await JavaCompileGate.RunAsync(_root, new CompileGateSettings { MaxRepairRounds = 1 },
+            NullLogger.Instance, executable: executable, generatedFiles: files,
+            repair: request => Task.FromResult<IReadOnlyDictionary<string, string>?>(
+                request.Program == "A.cbl"
+                    ? new Dictionary<string, string> { [files[0].FilePath] = fixedA }
+                    : new Dictionary<string, string> { [files[1].FilePath] = "public class B { int v = 1 SYNTAX }" }));
+
+        (await File.ReadAllTextAsync(files[0].FilePath)).Should().Be(fixedA);
+        (await File.ReadAllTextAsync(files[1].FilePath)).Should().Be("public class B { int v = broken; }");
+        result.Errors.Should().ContainSingle().Which.File.Should().Be("B.java");
+        result.Errors[0].Message.Should().Be("cannot find symbol: broken");
+        result.Rounds.Should().HaveCount(2);
+        result.Rounds[1].RolledBack.Should().BeFalse();
+    }
+
+    [Fact]
     public void Guard_RejectsRemovalOfPublicField()
     {
         JavaCompileGate.RejectCandidate("public class Record { public int value; }",

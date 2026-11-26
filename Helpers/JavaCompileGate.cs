@@ -111,18 +111,35 @@ public static class JavaCompileGate
                     foreach (var candidate in candidates)
                         await File.WriteAllTextAsync(candidate.Key, candidate.Value, cancellationToken);
                     measured = await BuildAsync(folder, Timeout(settings), executable, cancellationToken);
+                    // javac stops before resolving symbols when any file fails to parse, so a broken file
+                    // hides every other error and the count is no longer comparable. Revert just those files.
+                    var broken = SyntaxBroken(result, measured, candidates.Keys, folder);
+                    if (broken.Count > 0)
+                    {
+                        logger.LogWarning("Java compile repair round {Round}: reverted {Count} candidate(s) that introduced syntax errors: {Files}",
+                            round, broken.Count, string.Join(", ", broken.Select(path => Path.GetRelativePath(folder, path))));
+                        foreach (var path in broken)
+                        {
+                            await File.WriteAllTextAsync(path, originals[path], CancellationToken.None);
+                            originals.Remove(path);
+                            candidates.Remove(path);
+                        }
+                        if (candidates.Count > 0)
+                            measured = await BuildAsync(folder, Timeout(settings), executable, cancellationToken);
+                    }
                 }
                 catch
                 {
                     await RestoreAsync(originals);
                     throw;
                 }
-                if (!measured.Compiled && (!measured.Measured || measured.Errors.Count == 0
+                if (candidates.Count == 0 || !measured.Compiled && (!measured.Measured || measured.Errors.Count == 0
                     || measured.Errors.Count >= result.Errors.Count))
                 {
                     Record(measured, rolledBack: true);
                     await RestoreAsync(originals);
-                    logger.LogWarning("Java compile repair round {Round} rolled back: compiler failures did not decrease.", round);
+                    logger.LogWarning("Java compile repair round {Round} rolled back: {Reason}.", round,
+                        candidates.Count == 0 ? "every candidate introduced syntax errors" : "compiler failures did not decrease");
                     result = await BuildAsync(folder, Timeout(settings), executable, cancellationToken);
                     break;
                 }
@@ -259,6 +276,27 @@ public static class JavaCompileGate
             return new(process.ExitCode == 0, true, process.ExitCode,
                 process.ExitCode == 0 ? null : $"Maven exited {process.ExitCode}; see java-build.log.", Parse(output, folder));
         }
+    }
+
+    // javac's parser messages; any of them stops compilation before symbols and types are checked.
+    private static readonly Regex SyntaxMessage = new(
+        @"expected$|^illegal (?:start|character|line end)|^unclosed |^not a statement$|reached end of file while parsing|without 'try'|'try' without|^else without if$|^orphaned |^malformed |^invalid method declaration",
+        RegexOptions.Compiled);
+
+    internal static bool IsSyntaxError(CompilerDiagnostic diagnostic) => SyntaxMessage.IsMatch(diagnostic.Message);
+
+    internal static IReadOnlyList<string> SyntaxBroken(JavaCompileResult before, JavaCompileResult after,
+        IEnumerable<string> changedFiles, string folder)
+    {
+        static HashSet<string> Files(JavaCompileResult build) =>
+            build.Errors.Where(IsSyntaxError).Select(error => error.File.Replace('\\', '/')).ToHashSet(StringComparer.Ordinal);
+        var already = Files(before);
+        var now = Files(after);
+        return changedFiles.Where(path =>
+        {
+            var relative = Path.GetRelativePath(folder, path).Replace('\\', '/');
+            return now.Contains(relative) && !already.Contains(relative);
+        }).ToList();
     }
 
     internal static IReadOnlyList<CompilerDiagnostic> Parse(string output, string folder) =>
