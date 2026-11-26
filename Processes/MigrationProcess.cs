@@ -332,7 +332,8 @@ public class MigrationProcess
             // Step 4: Convert the COBOL files to target language
             var targetLang = _settings.ApplicationSettings.TargetLanguage;
             var langName = targetLang == TargetLanguage.CSharp ? "C#" : "Java";
-            var frameworkName = targetLang == TargetLanguage.CSharp ? ".NET" : "Quarkus";
+            var frameworkName = targetLang == TargetLanguage.CSharp ? ".NET"
+                : JavaGeneration.Framework(_settings.ConversionSettings) == "Spring" ? "Spring Boot" : "Quarkus";
 
             _enhancedLogger.ShowStep(4, totalSteps, $"{langName} Conversion", $"Converting to {langName} {frameworkName} microservices");
             _enhancedLogger.ShowDashboardSummary(runId, targetName, "RUNNING", $"{langName} Conversion", 60);
