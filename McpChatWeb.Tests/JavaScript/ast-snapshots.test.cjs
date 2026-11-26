@@ -517,3 +517,21 @@ test('raw inspector does not present generic embedded dialect nodes as SQL', () 
     if (nodeType !== 'SQL') assert.doesNotMatch(html, /class="inspector-header"[^>]*>SQL<\/div>/);
   }
 });
+
+test('graph labels show a node name only when it says more than its type', () => {
+  const sets = [];
+  const vis = {
+    DataSet: class { constructor(items) { this.items = items; sets.push(items); } get() {} },
+    Network: class { on() {} destroy() {} }
+  };
+  const f = fixture(() => reply({}), {}, { vis });
+  f.view.renderVisNetwork({ nodes: [
+    { id: 'n1', nodeType: 'MOVE', name: 'MOVE', startLine: 1, endLine: 1 },
+    { id: 'n2', nodeType: 'PARAGRAPH', name: 'MAIN-PARA', startLine: 2, endLine: 3 },
+    { id: 'n3', nodeType: 'IF_BRANCH', name: 'IF', startLine: 4, endLine: 5 }
+  ], edges: [] }, { innerHTML: '' });
+  const labels = sets[0].map(n => n.label);
+  assert.equal(labels[0], f.view._humanType('MOVE'));
+  assert.equal(labels[1], `${f.view._humanType('PARAGRAPH')}\nMAIN-PARA`);
+  assert.doesNotMatch(labels.join('|'), /MOVE\nMOVE/i);
+});

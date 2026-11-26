@@ -801,7 +801,10 @@ class ASTExplorer {
       // Human-readable label: show name (cleaned) instead of UUID
       const cleanName = isJcl ? (n.label || n.name || '') : (n.name || '').replace(/.*\//, '').replace(/Context\/.*/, '');
       const typeLabel = this._humanType(n.nodeType);
-      const displayLabel = cleanName ? `${typeLabel}\n${cleanName}` : typeLabel;
+      // A plain statement is named after its verb (MOVE), so its name repeats the type.
+      const same = (a, b) => a.replace(/[^A-Za-z0-9]/g, '').toUpperCase() === b.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const displayLabel = cleanName && !same(cleanName, typeLabel) && !same(cleanName, n.nodeType || '')
+        ? `${typeLabel}\n${cleanName}` : typeLabel;
 
       return {
         id: n.id,
