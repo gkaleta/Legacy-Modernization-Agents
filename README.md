@@ -123,6 +123,8 @@ cp -r /path/to/your/cobol/* source/
 
 `rekt-full` calls no model and needs no sign-in. It parses COBOL with the REKT parser in the `cobol-rekt` container, extracts JCL facts, records each program's parse fidelity, lists copybooks that are referenced but missing (`output/rekt/missing-copybooks.txt`), and loads everything into Neo4j. Each program prints one progress line with stage times and an estimate of the time left.
 
+No settings are needed to understand an estate. Each estate's CICS definitions (`*.csd`, or YAML with `resourceDefinitions:`), Db2 table declarations and IDCAMS VSAM definitions are found automatically, and the documented IBM services (Language Environment, IMS, Db2) and screen-key/BMS meanings are built in. The parse prints one `Found:` line per estate showing what it used. The `REKT_*` settings only override this; see [Configuration](docs/configuration.md) and [Explicit platform replacement contracts](docs/platform-replacement-contracts.md).
+
 | Option | Effect |
 |---|---|
 | `--parallel N` (or `REKT_PARSE_JOBS=N`) | Parse 1–16 programs at once. 2–4 is a good choice; allow about 1 GB of Docker memory per job. Results are identical to a sequential scan |
@@ -130,6 +132,7 @@ cp -r /path/to/your/cobol/* source/
 | `./doctor.sh rekt-status` | Container, graph and export status |
 | `PARSER_ENGINE=starforge` / `both` | Parse with Starforge, the local .NET parser (no Docker for the parse), or run both parsers and compare them. Default `rekt`. See [Parser engine](docs/doctor-commands.md#parser-engine-parser_engine) |
 | `REKT_VERBOSE=true` | Also stream the parser's own output (normally kept in `output/rekt/**/*.parse.log`) |
+| `./doctor.sh teach-parser` | Teach Starforge your site's own COBOL words with your own AI endpoint; asks before sending anything. See [Teach the parser](docs/teach-the-parser.md) |
 | `REKT_NO_BMS_MAPS=true` | Do not generate symbolic map copybooks from BMS mapsets |
 
 Unchanged programs are skipped as `(cached)`, so a rerun after a small change takes minutes. Add any missing copybooks to `source/` and run `rekt-full` again before converting. See [Parse first: rekt-full](docs/doctor-commands.md#parse-first-rekt-full).
@@ -437,6 +440,7 @@ Values load in the order `appsettings.json` → `ai-config.local.env` → enviro
 | [CA IDMS programs](docs/idms-dialect.md) | What Starforge reads in IDMS programs, the dictionary copybooks you must supply, and how REKT is called for them |
 | [Bundled system copybooks](docs/bundled-system-copybooks.md) | SQLCA/SQLDA parser inputs supplied when the source has none, with provenance |
 | [Explicit platform replacement contracts](docs/platform-replacement-contracts.md) | Replacing a platform service explicitly, without redistributing its SDK copybooks |
+| [Teach the parser](docs/teach-the-parser.md) | Teaching Starforge site words with your own AI endpoint; rules stay local |
 | [Bank-of-Z source corrections](docs/bank-of-z-source-corrections.md) | Corrections applied to the Bank-of-Z demonstration estate |
 | [Keeping estate data private](docs/keeping-estate-data-private.md) | Git ignores, the pre-commit guard and local estate rules |
 | [Azure AD / Entra ID Authentication Guide](docs/az-login-auth-guide.md) | Keyless auth setup |
