@@ -407,7 +407,7 @@ Values load in the order `appsettings.json` → `ai-config.local.env` → enviro
 | No output generated | Ensure COBOL files are in `source/` |
 | Portal won't start | `lsof -ti :5028 \| xargs kill -9` then retry |
 | A scan or command reports *Internal helper crashed* | A .NET helper threw an unhandled exception. The stack trace is in `Logs/doctor-helpers.log` and, for scans, in `helper-crashes.log` beside `scan.json`. Run `./doctor.sh` to check prerequisites, then rerun |
-| Build fails with `MSB3923 Failed to download file … registry.npmjs.org`, or setup says *Could not fetch user-specific models* | The network blocks the npm registry the Copilot SDK downloads its CLI from. `doctor.sh` falls back to your npm mirror or your installed Copilot CLI automatically; for plain `dotnet` commands, see [Building behind an NPM registry block](docs/building-behind-an-npm-registry-block.md) |
+| Build fails with `MSB3923 Failed to download file … github-copilot-…tgz`, or setup says *Could not fetch user-specific models* | The network blocks the GitHub release the Copilot SDK downloads its CLI from. `doctor.sh` falls back to your installed Copilot CLI automatically; for plain `dotnet` commands, see [Building behind a download block](docs/building-behind-an-npm-registry-block.md) |
 | `rekt-full` stops with *Source identity collisions prevent safe REKT staging* | REKT reads copybooks by name from one folder, so it stops only when two copybooks share a name, differ, and a `COPY` or `INCLUDE` uses that name. The message lists the copies and the files that use them. Rename one copy, or move the estate you are not parsing out of `source/`. Copies with the same text, or that nothing uses, are staged and reported as a note |
 
 ---
@@ -444,7 +444,7 @@ Values load in the order `appsettings.json` → `ai-config.local.env` → enviro
 | [Bank-of-Z source corrections](docs/bank-of-z-source-corrections.md) | Corrections applied to the Bank-of-Z demonstration estate |
 | [Keeping estate data private](docs/keeping-estate-data-private.md) | Git ignores, the pre-commit guard and local estate rules |
 | [Azure AD / Entra ID Authentication Guide](docs/az-login-auth-guide.md) | Keyless auth setup |
-| [Building behind an NPM registry block](docs/building-behind-an-npm-registry-block.md) | Restoring the Copilot CLI download on a network that blocks the public registry |
+| [Building behind a download block](docs/building-behind-an-npm-registry-block.md) | Building when the network blocks the Copilot CLI download |
 | [Validation and portal integration plan](docs/validation-and-portal-integration-plan.md) | Proposed plan for integrating validation and portal work (not yet executed) |
 | [Spec-Driven Code Generation](docs/spec-approach-concept.md) | A considered approach, deferred and not implemented; kept for the reasoning rather than as a description of the tool |
 | [Dev container](.devcontainer/README.md) | The VS Code development container |

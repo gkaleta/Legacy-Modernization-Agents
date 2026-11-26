@@ -1,7 +1,7 @@
 using Azure.AI.OpenAI;
 using Azure.Identity;
 using Azure.Core;
-using GitHub.Copilot;
+using Microsoft.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OpenAI;
@@ -207,13 +207,13 @@ public static class ChatClientFactory
         {
             if (CopilotAuth.ValidateToken(githubToken) is { } problem)
                 throw new InvalidOperationException(problem);
-            options = new CopilotClientOptions { Mode = CopilotClientMode.CopilotCli, GitHubToken = githubToken };
+            options = CopilotAuth.NewOptions(githubToken);
             logger?.LogInformation("Creating GitHub Copilot SDK chat client for model: {Model} (explicit token)", modelId);
         }
         else
         {
             var auth = CopilotAuth.Resolve();
-            options = CopilotAuth.Apply(new CopilotClientOptions { Mode = CopilotClientMode.CopilotCli }, auth);
+            options = CopilotAuth.Apply(CopilotAuth.NewOptions(), auth);
             logger?.LogInformation("Creating GitHub Copilot SDK chat client for model: {Model} (auth: {Auth})", modelId, auth.Description);
         }
 

@@ -27,7 +27,7 @@ public static class CopilotCliInfo
             : new[] { "copilot" };
 
     /// <summary>
-    /// The CLI version the referenced GitHub.Copilot.SDK package was built
+    /// The CLI version the referenced Microsoft.Copilot.SDK package was built
     /// against, captured from the SDK's own MSBuild property at compile time.
     /// Empty when the property was unavailable.
     /// </summary>

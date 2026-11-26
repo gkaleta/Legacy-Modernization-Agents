@@ -1,7 +1,7 @@
 using Xunit;
 using FluentAssertions;
 using CobolToQuarkusMigration.Agents.Infrastructure;
-using GitHub.Copilot;
+using Microsoft.Copilot;
 
 namespace CobolToQuarkusMigration.Tests.Agents.Infrastructure;
 
@@ -129,9 +129,9 @@ public class CopilotAuthTests
     {
         var options = CopilotAuth.CreateClientOptions(Env(("COPILOT_GITHUB_TOKEN", FineGrained)));
 
-        options.Mode.Should().Be(CopilotClientMode.CopilotCli);
-        options.GitHubToken.Should().Be(FineGrained);
-        options.Environment.Should().BeNull();
+        options.Mode.Should().Be(CopilotClientMode.CodingAgent);
+        options.GitHub!.Token.Should().Be(FineGrained);
+        CopilotAuth.RuntimeEnvironment(options).Should().BeNull();
     }
 
     [Fact]
@@ -144,12 +144,13 @@ public class CopilotAuthTests
         try
         {
             var resolution = new CopilotAuth.Resolution(CopilotAuth.Mode.Login, null, null, new[] { "GH_TOKEN" }, "copilot login");
-            var options = CopilotAuth.Apply(new CopilotClientOptions(), resolution);
+            var options = CopilotAuth.Apply(CopilotAuth.NewOptions(), resolution);
+            var environment = CopilotAuth.RuntimeEnvironment(options);
 
-            options.GitHubToken.Should().BeNull();
-            options.Environment.Should().NotBeNull();
-            options.Environment!.Should().ContainKey(marker);
-            options.Environment!.Keys.Should().NotContain("GH_TOKEN");
+            options.GitHub?.Token.Should().BeNull();
+            environment.Should().NotBeNull();
+            environment!.Should().ContainKey(marker);
+            environment!.Keys.Should().NotContain("GH_TOKEN");
         }
         finally
         {
@@ -180,9 +181,10 @@ public class CopilotAuthTests
             Environment.SetEnvironmentVariable("GITHUB_HOST", host);
             Environment.SetEnvironmentVariable("GH_TOKEN", "gho_unrelated");
             var options = CopilotAuth.CreateClientOptions(Env(("COPILOT_AUTH", "login"), ("GH_TOKEN", "gho_unrelated")));
-            options.Environment.Should().NotBeNull();
-            options.Environment!["GITHUB_HOST"].Should().Be(host);
-            options.Environment.Keys.Should().NotContain("GH_TOKEN");
+            var environment = CopilotAuth.RuntimeEnvironment(options);
+            environment.Should().NotBeNull();
+            environment!["GITHUB_HOST"].Should().Be(host);
+            environment.Keys.Should().NotContain("GH_TOKEN");
         }
         finally
         {

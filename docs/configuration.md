@@ -94,9 +94,9 @@ _CODE_MODEL="gpt-5.1-codex-mini"     # For Code Conversion
 > You need the **"Cognitive Services OpenAI User"** role on your Azure OpenAI resource.
 > See [Azure AD / Entra ID Authentication Guide](az-login-auth-guide.md) for full instructions.
 
-> 🧱 **Build fails downloading the Copilot CLI?** The Copilot SDK fetches it from an NPM
-> registry at build time and does not read `.npmrc`.
-> See [Building behind an NPM registry block](building-behind-an-npm-registry-block.md).
+> 🧱 **Build fails downloading the Copilot CLI?** The Copilot SDK fetches it from GitHub
+> releases at build time.
+> See [Building behind a download block](building-behind-an-npm-registry-block.md).
 
 ## Neo4j (Dependency Graphs)
 

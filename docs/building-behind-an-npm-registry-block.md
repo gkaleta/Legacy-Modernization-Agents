@@ -1,55 +1,48 @@
-**Last updated**: 2026-10-07
+**Last updated**: 2026-11-26
 
-# Building behind an NPM registry block
+# Building behind a download block
 
-`GitHub.Copilot.SDK` 1.x downloads the Copilot CLI binary from an NPM registry **at build time**. On a machine where the public registry is unreachable the build fails before any code is compiled:
+`Microsoft.Copilot.SDK` 2.x downloads the Copilot CLI runtime from GitHub releases **at build time**. On a machine where that download is blocked, the build fails before any code is compiled:
 
 ```
 error MSB3923: Failed to download file
-"https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.57.tgz"
+"https://github.com/github/copilot-cli/releases/download/v1.0.114/github-copilot-1.0.114-darwin-arm64.tgz"
 ```
 
-The same failure shows up during `./doctor.sh setup` as *Could not fetch user-specific models, falling back to CLI model list*, because the model list is fetched by building and running the CLI.
+The same failure shows up during `./doctor.sh setup` as *Could not fetch user-specific models, falling back to CLI model list*, because the model list is fetched by building and running the app.
+
+The download comes from `github.com`, which redirects to `release-assets.githubusercontent.com`. It does not use the npm registry, and `.npmrc` or `npm config` have no effect. (Older versions of this page described an npm download; the SDK no longer uses one, and the `CopilotNpmRegistryUrl` property is ignored.)
 
 ## doctor.sh handles it
 
-Before its first build, `doctor.sh` checks whether the registry is reachable. If it is not, it picks the first of these that works and says which it used:
+Before its first build, `doctor.sh` checks whether the download for the CLI version the app is built for is reachable. If it is not, it uses the native binary of an installed Copilot CLI (sets `CopilotCliBinaryPath`) and says so. If there is none, it prints the options below.
 
-1. The registry `npm config get registry` reports, when that is a different, reachable mirror (sets `CopilotNpmRegistryUrl`).
-2. The native binary of an installed Copilot CLI (sets `CopilotCliBinaryPath`).
+Nothing is checked once a build has downloaded the runtime, or when `CopilotCliBinaryPath` or `CopilotSkipCliDownload` is already set. Plain `dotnet build` and `dotnet run` commands need one of the options below.
 
-If neither is available it prints the options below. Nothing is checked once a build has downloaded the CLI, or when either property is already set. Plain `dotnet build` and `dotnet run` commands need one of the options below.
+## Option 1 — allow the download, or use a proxy
 
-## The setting is not read from .npmrc
+Allow `github.com` and `release-assets.githubusercontent.com`, or set `HTTPS_PROXY` to a proxy that can reach them.
 
-This is the part that costs time. The SDK resolves the registry from its own MSBuild property, `CopilotNpmRegistryUrl`, which defaults to the public registry. It never consults `npm config` or any `.npmrc`. A machine whose npm client is correctly pointed at an internal mirror will still fail this build, because nothing in the build path looks at npm's configuration.
+## Option 2 — download from an internal mirror
 
-## Option 1 — build against an internal registry mirror
-
-Set the property to a mirror that proxies the public registry. As an environment variable, so nothing internal is committed to the repository:
+If your organisation mirrors the `github/copilot-cli` releases, point the build at the mirror. It must keep the same layout (`<base>/v<version>/github-copilot-<version>-<platform>.tgz` with `SHA256SUMS.txt` next to it):
 
 ```bash
-export CopilotNpmRegistryUrl=https://<your-mirror>/npm
+export COPILOT_CLI_DOWNLOAD_BASE_URL=https://<your-mirror>/copilot-cli/releases/download
 dotnet build
 ```
 
-Or per invocation:
+Or per invocation: `dotnet build -p:CopilotCliReleaseBaseUrl=https://<your-mirror>/copilot-cli/releases/download`.
 
-```bash
-dotnet build -p:CopilotNpmRegistryUrl=https://<your-mirror>/npm
-```
+## Option 3 — build against an already-installed CLI
 
-Microsoft-managed devices: the approved mirror is the one `npm config get registry` already reports. Use that value.
-
-## Option 2 — build against an already-installed CLI
-
-Where no registry is reachable at all, point the build at a Copilot CLI that is already on the machine. The download step is skipped entirely:
+Where nothing can be downloaded, point the build at a Copilot CLI that is already on the machine. The download step is skipped entirely:
 
 ```bash
 dotnet build -p:CopilotCliBinaryPath=/path/to/copilot
 ```
 
-This is the option for air-gapped environments, and it is also faster, since nothing is fetched or extracted.
+This is the option for air-gapped environments.
 
 The path must be the **native binary**, not the `copilot` command on your `PATH`. npm and Homebrew installs put a Node loader script there, and the SDK copies the file into the build output, where the script cannot run. The native binary sits next to it:
 
@@ -58,16 +51,16 @@ The path must be the **native binary**, not the `copilot` command on your `PATH`
 export CopilotCliBinaryPath="$(npm root -g)/@github/copilot/node_modules/@github/copilot-darwin-arm64/copilot"
 ```
 
-An environment variable works for every `dotnet` command, because MSBuild reads environment variables as properties. The installed CLI can be newer than the version the SDK pins; the SDK talks to it the same way.
+An environment variable works for every `dotnet` command, because MSBuild reads environment variables as properties. Keep the installed CLI at least as new as the version the app is built for (`./doctor.sh doctor` shows both); an older one can fail with `SDK protocol version mismatch`.
 
 ## Verifying
 
-A successful download leaves the binary under `obj/`:
+A successful download leaves the runtime under `obj/`, with a completion marker:
 
 ```
-obj/Debug/net10.0/copilot-cli/<version>/<platform>/copilot
+obj/Debug/net10.0/copilot-cli/<version>/<platform>/.copilot-runtime-complete
 ```
 
-Either way, the build copies it to `bin/Debug/net10.0/runtimes/<rid>/native/`, which is where it runs from.
+Either way, the build copies the runtime to `bin/Debug/net10.0/runtimes/<rid>/native/`, which is where it runs from. The app starts it as a separate process.
 
-The expected CLI version is compiled into the assembly as metadata, so a mismatch between the CLI the SDK was built against and the one installed can be reported directly rather than surfacing as a protocol error during the handshake.
+The expected CLI version is compiled into the assembly as metadata, so a mismatch between the CLI the SDK was built against and the one in use can be reported directly rather than surfacing as a protocol error during the handshake.

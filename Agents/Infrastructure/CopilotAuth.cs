@@ -1,4 +1,4 @@
-using GitHub.Copilot;
+using Microsoft.Copilot;
 
 namespace CobolToQuarkusMigration.Agents.Infrastructure;
 
@@ -97,13 +97,32 @@ public static class CopilotAuth
     /// Client options for the Copilot runtime with the resolved credential applied.
     /// </summary>
     public static CopilotClientOptions CreateClientOptions(Func<string, string?>? getEnvironment = null)
-        => Apply(new CopilotClientOptions { Mode = CopilotClientMode.CopilotCli }, Resolve(getEnvironment));
+        => Apply(NewOptions(), Resolve(getEnvironment));
+
+    /// <summary>
+    /// CLI-like client whose runtime runs as its own child process (the SDK 2 default runs it inside this process,
+    /// where a runtime crash would end the app). COPILOT_CLI_PATH, when set, picks the runtime binary.
+    /// </summary>
+    public static CopilotClientOptions NewOptions(string? token = null)
+    {
+        var options = new CopilotClientOptions { Mode = CopilotClientMode.CodingAgent, Runtime = RuntimeConnection.ForSpawnedStdio() };
+        if (token is not null)
+        {
+            options.GitHub = new ClientGitHubOptions { Token = token };
+        }
+
+        return options;
+    }
+
+    /// <summary>The environment the runtime child process gets, or null when it inherits this process's.</summary>
+    public static IReadOnlyDictionary<string, string>? RuntimeEnvironment(CopilotClientOptions options)
+        => (options.Runtime as ChildProcessRuntimeConnection)?.Environment;
 
     public static CopilotClientOptions Apply(CopilotClientOptions options, Resolution resolution)
     {
         if (resolution.Token is not null)
         {
-            options.GitHubToken = resolution.Token;
+            options.GitHub = new ClientGitHubOptions { Token = resolution.Token };
             return options;
         }
 
@@ -116,7 +135,7 @@ public static class CopilotAuth
                 if (entry.Key is string key && entry.Value is string value && !resolution.HiddenVariables.Contains(key, StringComparer.OrdinalIgnoreCase))
                     environment[key] = value;
             }
-            options.Environment = environment;
+            options.Runtime = RuntimeConnection.ForSpawnedStdio(environment: environment);
         }
         return options;
     }

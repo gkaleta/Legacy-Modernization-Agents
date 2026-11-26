@@ -1,4 +1,4 @@
-using GitHub.Copilot;
+using Microsoft.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
@@ -67,13 +67,42 @@ public sealed class CopilotChatClient : IChatClient, IAsyncDisposable
             : ResolveRequestTimeout(Environment.GetEnvironmentVariable(RequestTimeoutEnvVar));
 
         // Merge logger into options if provided
-        var clientOptions = options ?? new CopilotClientOptions();
+        var clientOptions = options ?? CopilotAuth.NewOptions();
         if (logger != null)
         {
-            clientOptions.Logger = logger;
+            clientOptions.Observability = new ClientObservabilityOptions { Logger = logger };
         }
 
         _client = new CopilotClient(clientOptions);
+    }
+
+    // Raw completions only: no tools, no compaction, and prompts (customer code) are kept out of the
+    // runtime's cross-session store and memory.
+    internal static CreateSessionOptions SessionOptions(string model, string? systemMessage, bool streaming)
+    {
+        var options = new CreateSessionOptions
+        {
+            Model = model,
+            State = new SessionStateOptions
+            {
+                InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+                EnableCrossSessionStore = false,
+                Memory = new MemoryConfiguration { Enabled = false },
+            },
+            Tools = new SessionToolOptions { AvailableTools = [] },
+            Permissions = new SessionPermissionOptions { OnRequest = PermissionHandler.ApproveAll },
+        };
+        if (systemMessage is not null)
+        {
+            options.SystemMessage = new SystemMessageConfig { Mode = SystemMessageMode.Replace, Content = systemMessage };
+        }
+
+        if (streaming)
+        {
+            options.Events = new SessionEventOptions { Streaming = true };
+        }
+
+        return options;
     }
 
     /// <summary>
@@ -136,26 +165,7 @@ public sealed class CopilotChatClient : IChatClient, IAsyncDisposable
         }
 
         // Create a session per request (stateless adapter pattern)
-        var sessionConfig = new SessionConfig
-        {
-            Model = model,
-            InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
-            OnPermissionRequest = PermissionHandler.ApproveAll
-        };
-
-        if (systemMessage != null)
-        {
-            sessionConfig.SystemMessage = new SystemMessageConfig
-            {
-                Mode = SystemMessageMode.Replace,
-                Content = systemMessage
-            };
-        }
-
-        // Disable all built-in tools — we only want raw LLM completions
-        sessionConfig.AvailableTools = new List<string>();
-
-        await using var session = await _client.CreateSessionAsync(sessionConfig);
+        await using var session = await _client.CreateSessionAsync(SessionOptions(model, systemMessage, streaming: false));
 
         var responseBuilder = new StringBuilder();
         var done = new TaskCompletionSource();
@@ -253,26 +263,7 @@ public sealed class CopilotChatClient : IChatClient, IAsyncDisposable
             }
         }
 
-        var sessionConfig = new SessionConfig
-        {
-            Model = model,
-            Streaming = true,
-            InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
-            OnPermissionRequest = PermissionHandler.ApproveAll
-        };
-
-        if (systemMessage != null)
-        {
-            sessionConfig.SystemMessage = new SystemMessageConfig
-            {
-                Mode = SystemMessageMode.Replace,
-                Content = systemMessage
-            };
-        }
-
-        sessionConfig.AvailableTools = new List<string>();
-
-        await using var session = await _client.CreateSessionAsync(sessionConfig);
+        await using var session = await _client.CreateSessionAsync(SessionOptions(model, systemMessage, streaming: true));
 
         var channel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
         var writer = channel.Writer;

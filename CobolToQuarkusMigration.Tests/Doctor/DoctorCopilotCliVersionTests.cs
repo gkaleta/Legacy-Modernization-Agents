@@ -16,12 +16,12 @@ public sealed class DoctorCopilotCliVersionTests : IDisposable
         File.WriteAllText(Path.Join(_doctor.Root, "Config", "ai-config.local.env"),
             "AZURE_OPENAI_SERVICE_TYPE=GitHubCopilot\nAISETTINGS__MODELID=test-model\n");
         File.WriteAllText(Path.Join(_doctor.Root, "CobolToQuarkusMigration.csproj"),
-            """<Project><ItemGroup><PackageReference Include="GitHub.Copilot.SDK" Version="9.9.9" /></ItemGroup></Project>""");
+            """<Project><ItemGroup><PackageReference Include="Microsoft.Copilot.SDK" Version="9.9.9" /></ItemGroup></Project>""");
 
         var packages = Path.Join(_doctor.Root, "nuget");
-        var build = Path.Join(packages, "github.copilot.sdk", "9.9.9", "build");
+        var build = Path.Join(packages, "microsoft.copilot.sdk", "9.9.9", "build");
         Directory.CreateDirectory(build);
-        File.WriteAllText(Path.Join(build, "GitHub.Copilot.SDK.props"),
+        File.WriteAllText(Path.Join(build, "Microsoft.Copilot.SDK.props"),
             "<Project><PropertyGroup>\n    <CopilotCliVersion>1.0.112</CopilotCliVersion>\n</PropertyGroup></Project>\n");
         _doctor.Env["NUGET_PACKAGES"] = DoctorFixture.Posix(packages);
     }

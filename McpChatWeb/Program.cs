@@ -4445,16 +4445,12 @@ app.MapPost("/api/models/connect", async (McpChatWeb.Models.ConnectProviderReque
 			// ── GitHub Copilot SDK: list models via CopilotClient ──
 			try
 			{
-				GitHub.Copilot.CopilotClientOptions options;
+				Microsoft.Copilot.CopilotClientOptions options;
 				if (!string.IsNullOrWhiteSpace(request.ApiKey))
 				{
 					if (CobolToQuarkusMigration.Agents.Infrastructure.CopilotAuth.ValidateToken(request.ApiKey.Trim()) is { } tokenProblem)
 						return Results.Ok(new { error = tokenProblem, authenticated = false });
-					options = new GitHub.Copilot.CopilotClientOptions
-					{
-						Mode = GitHub.Copilot.CopilotClientMode.CopilotCli,
-						GitHubToken = request.ApiKey.Trim()
-					};
+					options = CobolToQuarkusMigration.Agents.Infrastructure.CopilotAuth.NewOptions(request.ApiKey.Trim());
 				}
 				else
 				{
@@ -4465,7 +4461,7 @@ app.MapPost("/api/models/connect", async (McpChatWeb.Models.ConnectProviderReque
 							: Environment.GetEnvironmentVariable(name));
 				}
 
-				using var client = new GitHub.Copilot.CopilotClient(options);
+				await using var client = new Microsoft.Copilot.CopilotClient(options);
 				var copilotModels = await client.ListModelsAsync();
 
 				foreach (var m in copilotModels.OrderBy(m => m.Name))

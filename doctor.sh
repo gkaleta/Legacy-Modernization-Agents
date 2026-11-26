@@ -116,11 +116,11 @@ detect_dotnet_cli() {
 
 DOTNET_CMD="$(detect_dotnet_cli)"
 
-# The Copilot SDK package downloads its own Copilot CLI from the npm registry on the first
-# build. Where a proxy, firewall or VPN blocks the registry, every build fails with MSB3923
-# before any command runs. An installed Copilot CLI ships the same native binary, and the SDK
-# accepts it through the CopilotCliBinaryPath build property (MSBuild reads it from the
-# environment), so the download is skipped.
+# The Copilot SDK package downloads its Copilot CLI runtime from GitHub releases on the first
+# build. Where a proxy, firewall or VPN blocks the download, every build fails with MSB3923
+# before any command runs. An installed Copilot CLI ships a native binary the SDK accepts
+# through the CopilotCliBinaryPath build property (MSBuild reads it from the environment), so
+# the download is skipped.
 copilot_cli_platform() {
     local os arch
     case "$(uname -s)" in
@@ -178,48 +178,40 @@ find_native_copilot_cli() {
 ensure_copilot_cli_for_build() {
     [[ -n "${CopilotCliBinaryPath:-}" || "${CopilotSkipCliDownload:-}" == "true" ]] && return 0
 
-    # Each project that builds against the SDK keeps its own downloaded copy.
-    local project missing=false
-    for project in "$REPO_ROOT" "$REPO_ROOT/McpChatWeb"; do
-        compgen -G "$project/obj/*/net*/copilot-cli/*/*/copilot" >/dev/null \
-            || compgen -G "$project/obj/*/net*/copilot-cli/*/*/copilot.exe" >/dev/null \
-            || missing=true
-    done
-    [[ "$missing" == "true" ]] || return 0
+    local version platform
+    version="$(copilot_sdk_cli_version)"
+    platform="$(copilot_cli_platform)" || return 0
 
-    local registry="${CopilotNpmRegistryUrl:-https://registry.npmjs.org}"
+    # The app project downloads it; the portal gets it through its project reference.
+    compgen -G "$REPO_ROOT/obj/*/net*/copilot-cli/${version:-*}/$platform/.copilot-runtime-complete" >/dev/null && return 0
+
     command -v curl >/dev/null 2>&1 || return 0
-    curl -fsS -o /dev/null -m 8 "${registry%/}/" 2>/dev/null && return 0
-
-    # The SDK never reads npm's own configuration, but a mirror npm is already set up to use
-    # serves the same package, and keeps the CLI version the SDK was built against.
-    local mirror
-    if [[ -z "${CopilotNpmRegistryUrl:-}" ]] && command -v npm >/dev/null 2>&1; then
-        mirror="$(npm config get registry 2>/dev/null)"
-        mirror="${mirror%/}"
-        if [[ "$mirror" == https://* && "$mirror" != "https://registry.npmjs.org" ]] \
-            && curl -fsS -o /dev/null -m 8 "$mirror/" 2>/dev/null; then
-            export CopilotNpmRegistryUrl="$mirror"
-            echo -e "${YELLOW}ℹ️  $registry is not reachable, so the build downloads the Copilot CLI from your npm registry:${NC}"
-            echo -e "${YELLOW}   $mirror${NC}"
-            return 0
-        fi
+    local base="${CopilotCliReleaseBaseUrl:-${COPILOT_CLI_DOWNLOAD_BASE_URL:-https://github.com/github/copilot-cli/releases/download}}"
+    local url
+    if [[ -n "$version" ]]; then
+        url="${base%/}/v$version/github-copilot-$version-$platform.tgz"
+        curl -fsSIL -o /dev/null -m 8 "$url" 2>/dev/null && return 0
+    else
+        # Before the first restore the version is unknown; any answer means the host is reachable.
+        url="${base%/}/"
+        curl -sSIL -o /dev/null -m 8 "$url" 2>/dev/null && return 0
     fi
 
     local native
     if native="$(find_native_copilot_cli)"; then
         export CopilotCliBinaryPath="$native"
-        echo -e "${YELLOW}ℹ️  $registry is not reachable, so the build uses your installed Copilot CLI:${NC}"
+        echo -e "${YELLOW}ℹ️  The Copilot CLI download is not reachable, so the build uses your installed Copilot CLI:${NC}"
         echo -e "${YELLOW}   $native${NC}"
         return 0
     fi
 
-    echo -e "${YELLOW}⚠️  $registry is not reachable, and the first build downloads the Copilot CLI from it.${NC}"
+    echo -e "${YELLOW}⚠️  The first build downloads the Copilot CLI, and this is not reachable:${NC}"
+    echo -e "${YELLOW}   $url${NC}"
     echo -e "${YELLOW}   The build will fail with MSB3923 unless one of these is done:${NC}"
-    echo -e "${YELLOW}   • allow access to the registry, or set HTTPS_PROXY${NC}"
+    echo -e "${YELLOW}   • allow github.com and release-assets.githubusercontent.com, or set HTTPS_PROXY${NC}"
     echo -e "${YELLOW}   • install the Copilot CLI (npm install -g @github/copilot) and re-run${NC}"
     echo -e "${YELLOW}   • export CopilotCliBinaryPath=<path to a native copilot binary>${NC}"
-    echo -e "${YELLOW}   • export CopilotNpmRegistryUrl=<your npm mirror>${NC}"
+    echo -e "${YELLOW}   • export COPILOT_CLI_DOWNLOAD_BASE_URL=<your mirror of the copilot-cli releases>${NC}"
     echo -e "${YELLOW}   See docs/building-behind-an-npm-registry-block.md${NC}"
 }
 
@@ -234,11 +226,15 @@ version_lt() {
 # The Copilot CLI version the referenced SDK package was built for, read from the restored
 # package. Empty before the first restore.
 copilot_sdk_cli_version() {
-    local sdk props
-    sdk="$(sed -nE 's|.*Include="GitHub\.Copilot\.SDK" Version="([^"]+)".*|\1|p' "$REPO_ROOT/CobolToQuarkusMigration.csproj" 2>/dev/null | head -1)"
-    [[ -n "$sdk" ]] || return 0
-    props="${NUGET_PACKAGES:-$HOME/.nuget/packages}/github.copilot.sdk/$sdk/build/GitHub.Copilot.SDK.props"
-    [[ -f "$props" ]] && sed -nE 's|.*<CopilotCliVersion>([^<]+)</CopilotCliVersion>.*|\1|p' "$props" | head -1
+    local package sdk props
+    # SDK 2 renamed the package from GitHub.Copilot.SDK to Microsoft.Copilot.SDK.
+    for package in Microsoft.Copilot.SDK GitHub.Copilot.SDK; do
+        sdk="$(sed -nE "s|.*Include=\"${package//./\\.}\" Version=\"([^\"]+)\".*|\\1|p" "$REPO_ROOT/CobolToQuarkusMigration.csproj" 2>/dev/null | head -1)"
+        [[ -n "$sdk" ]] || continue
+        props="${NUGET_PACKAGES:-$HOME/.nuget/packages}/$(printf '%s' "$package" | tr '[:upper:]' '[:lower:]')/$sdk/build/$package.props"
+        [[ -f "$props" ]] && sed -nE 's|.*<CopilotCliVersion>([^<]+)</CopilotCliVersion>.*|\1|p' "$props" | head -1
+        return 0
+    done
     return 0
 }
 

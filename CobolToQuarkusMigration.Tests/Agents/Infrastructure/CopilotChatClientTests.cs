@@ -4,7 +4,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Moq;
 using CobolToQuarkusMigration.Agents.Infrastructure;
-using GitHub.Copilot;
+using Microsoft.Copilot;
 
 using AIChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -79,7 +79,7 @@ public class CopilotChatClientTests
     [Fact]
     public void Constructor_WithOptions_DoesNotThrow()
     {
-        var options = new CopilotClientOptions { Mode = CopilotClientMode.CopilotCli };
+        var options = CopilotAuth.NewOptions();
         using var client = CreateClient(options: options);
         client.Should().NotBeNull();
     }
@@ -95,10 +95,22 @@ public class CopilotChatClientTests
     [Fact]
     public void Constructor_WithOptionsAndLogger_DoesNotThrow()
     {
-        var options = new CopilotClientOptions();
+        var options = CopilotAuth.NewOptions();
         var logger = new Mock<ILogger>().Object;
         using var client = CreateClient(options: options, logger: logger);
         client.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void SessionOptions_KeepPromptsOutOfStoresAndTools()
+    {
+        var options = CopilotChatClient.SessionOptions("m", "sys", streaming: false);
+
+        options.State!.EnableCrossSessionStore.Should().BeFalse();
+        options.State.Memory!.Enabled.Should().BeFalse();
+        options.State.InfiniteSessions!.Enabled.Should().BeFalse();
+        options.Tools!.AvailableTools.Should().BeEmpty();
+        options.SystemMessage!.Mode.Should().Be(SystemMessageMode.Replace);
     }
 
     #endregion
