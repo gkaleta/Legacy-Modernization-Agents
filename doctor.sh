@@ -2707,16 +2707,26 @@ if [[ "${REKT_CICS_RESOURCE_DEFINITIONS+x}" != x ]]; then
 fi
 if [[ "${REKT_DEPENDENCY_PROFILE+x}" != x ]]; then
     configured_profile="$(read_local_config_value REKT_DEPENDENCY_PROFILE)"
+    # The documented IBM runtime services (Language Environment, IMS, Db2) are on by default.
+    [[ -n "$configured_profile" || ! -f "$REKT_CONTRACTS_DIR/ibm-platform-services-v1.json" ]] \
+        || configured_profile="$REKT_CONTRACTS_DIR/ibm-platform-services-v1.json"
     [[ -z "$configured_profile" ]] || export REKT_DEPENDENCY_PROFILE="$configured_profile"
 fi
+[[ "${REKT_DEPENDENCY_PROFILE:-}" != none ]] || export REKT_DEPENDENCY_PROFILE=""
 if [[ "${REKT_PLATFORM_CONTRACTS+x}" != x ]]; then
     configured_platform="$(read_local_config_value REKT_PLATFORM_CONTRACTS)"
+    # IBM screen-key (DFHAID) and BMS attribute (DFHBMSCA) meanings are on by default.
+    [[ -n "$configured_platform" || ! -f "$REKT_CONTRACTS_DIR/cics-terminal-and-bms-v1.json" ]] \
+        || configured_platform="$REKT_CONTRACTS_DIR/cics-terminal-and-bms-v1.json"
     [[ -z "$configured_platform" ]] || export REKT_PLATFORM_CONTRACTS="$configured_platform"
 fi
+# "none" switches the built-in platform contracts off.
+[[ "${REKT_PLATFORM_CONTRACTS:-}" != none ]] || export REKT_PLATFORM_CONTRACTS=""
 if [[ "${REKT_SQL_DECLARATIONS+x}" != x ]]; then
     configured_sql="$(read_local_config_value REKT_SQL_DECLARATIONS)"
     [[ -z "$configured_sql" ]] || export REKT_SQL_DECLARATIONS="$configured_sql"
 fi
+# Unset means: find each estate's own Db2 declarations (rekt_sql_declarations_for).
 # A moved port is passed on to the CLI and portal; otherwise their own settings apply unchanged.
 if [[ "$NEO4J_BOLT_PORT" != "7687" && -z "${ApplicationSettings__Neo4j__Uri:-}" ]]; then
     export ApplicationSettings__Neo4j__Uri="bolt://localhost:$NEO4J_BOLT_PORT"
@@ -3327,11 +3337,15 @@ rekt_dependency_profile_for() {
 }
 
 # CICS resource definitions follow the estate: a configured catalog under the estate wins,
-# otherwise the estate's own supplied DFHCSDUP files (*.csd) are used, so estates never
-# resolve transactions or programs from another estate's CSD.
+# otherwise the estate's own supplied DFHCSDUP files (*.csd) and resourceDefinitions YAML catalogs
+# (*.yaml|*.yml starting a top-level resourceDefinitions: key) are used, so estates never
+# resolve transactions or programs from another estate's definitions.
 rekt_cics_resources_for() {
     local estate="$1" configured="${REKT_CICS_RESOURCE_DEFINITIONS:-}" item
-    if [[ "$estate" == .* || ! -d "$REPO_ROOT/source/$estate" ]]; then
+    local dir="$estate" prefix="/source/$estate/"
+    # A single estate (.all) is the whole source/ folder.
+    [[ "$estate" != .all ]] || { dir=""; prefix="/source/"; }
+    if [[ ( "$estate" == .* && "$estate" != .all ) || ! -d "$REPO_ROOT/source/$dir" ]]; then
         printf '%s\n' "$configured"
         return 0
     fi
@@ -3339,7 +3353,7 @@ rekt_cics_resources_for() {
         local inside=true; local -a items=()
         IFS=':' read -r -a items <<< "$configured"
         for item in "${items[@]}"; do
-            [[ "$item" == "/source/$estate/"* ]] || inside=false
+            [[ "$item" == "$prefix"* ]] || inside=false
         done
         if [[ "$inside" == true ]]; then
             printf '%s\n' "$configured"
@@ -3347,9 +3361,32 @@ rekt_cics_resources_for() {
         fi
     fi
     local csd
-    csd="$(cd "$REPO_ROOT/source/$estate" && find . -path '*/.*' -prune -o -type f -iname '*.csd' -print \
-        | LC_ALL=C sort | sed "s|^\./|/source/$estate/|" | paste -sd: -)"
+    csd="$(cd "$REPO_ROOT/source/$dir" && {
+        find . -path '*/.*' -prune -o -type f -iname '*.csd' -print
+        find . -path '*/.*' -prune -o -type f \( -iname '*.yaml' -o -iname '*.yml' \) \
+            -exec grep -l '^resourceDefinitions:' {} +
+    } | LC_ALL=C sort | sed "s|^\./|$prefix|" | paste -sd: -)"
     printf '%s\n' "${csd:-$configured}"
+}
+
+# Db2 table declarations follow the estate: an explicit REKT_SQL_DECLARATIONS wins ("none" turns them
+# off); otherwise the estate's non-program members holding EXEC SQL DECLARE ... TABLE are used.
+rekt_sql_declarations_for() {
+    local estate="$1" dir="$1" prefix="/source/$1/"
+    if [[ "${REKT_SQL_DECLARATIONS+x}" == x ]]; then
+        if [[ "$REKT_SQL_DECLARATIONS" == none ]]; then printf '\n'; else printf '%s\n' "$REKT_SQL_DECLARATIONS"; fi
+        return 0
+    fi
+    [[ "$estate" != .all ]] || { dir=""; prefix="/source/"; }
+    if [[ ( "$estate" == .* && "$estate" != .all ) || ! -d "$REPO_ROOT/source/$dir" ]]; then
+        printf '\n'
+        return 0
+    fi
+    (cd "$REPO_ROOT/source/$dir" && find . -path '*/.*' -prune -o -type f -print0 \
+        | xargs -0 grep -liE 'EXEC[[:space:]]+SQL[[:space:]]+DECLARE[[:space:]]+[^[:space:]]+[[:space:]]+TABLE' 2>/dev/null \
+        | while IFS= read -r file; do
+            grep -qiE 'PROCEDURE[[:space:]]+DIVISION' "$file" || printf '%s\n' "$file"
+        done | LC_ALL=C sort | sed "s|^\./|$prefix|" | paste -sd: -)
 }
 
 # Estate JCL with IDCAMS steps: the parser reads DEFINE CLUSTER/ALTERNATEINDEX/PATH for CSD file lengths.
@@ -3358,6 +3395,31 @@ rekt_vsam_definitions_for() {
     [[ "$estate" == .* || ! -d "$REPO_ROOT/source/$estate" ]] && return 0
     (cd "$REPO_ROOT/source/$estate" && find . -path '*/.*' -prune -o -type f \( -iname '*.jcl' -o -iname '*.prc' \) -print0 \
         | xargs -0 grep -lis 'PGM=IDCAMS' | LC_ALL=C sort | sed "s|^\./|/source/$estate/|" | paste -sd: -)
+}
+
+# One line per estate: which dependency inputs were found or configured, so a gap is visible up front.
+rekt_print_estate_inputs() {
+    local estate="$1" contracts_dir="$REPO_ROOT/tools/cobol-rekt/contracts" list profile platform
+    _rekt_input_files() { [[ -z "$1" ]] && printf 'none' || printf '%s file(s)' "$(tr ':' '\n' <<<"$1" | grep -c .)"; }
+    list="CICS definitions: $(_rekt_input_files "$(rekt_cics_resources_for "$estate")")"
+    [[ -z "${REKT_CICS_RESOURCE_DEFINITIONS:-}" ]] || list+=" (setting)"
+    list+=" · Db2 declarations: $(_rekt_input_files "$(rekt_sql_declarations_for "$estate")")"
+    [[ "${REKT_SQL_DECLARATIONS+x}" != x ]] || list+=" (setting)"
+    list+=" · VSAM (IDCAMS JCL): $(_rekt_input_files "$(rekt_vsam_definitions_for "$estate")")"
+    profile="$(rekt_dependency_profile_for "$estate")"
+    case "$profile" in
+        "") profile="off" ;;
+        "$contracts_dir/ibm-platform-services-v1.json") profile="built-in" ;;
+        "$contracts_dir/estates/"*) profile="estate (${profile##*/})" ;;
+        *) profile="setting (${profile##*/})" ;;
+    esac
+    platform="${REKT_PLATFORM_CONTRACTS:-}"
+    case "$platform" in
+        "") platform="off" ;;
+        "$contracts_dir/cics-terminal-and-bms-v1.json") platform="built-in" ;;
+        *) platform="setting (${platform##*/})" ;;
+    esac
+    echo -e "  ${BLUE}[$estate] Found: $list · IBM services: $profile · DFHAID/DFHBMSCA: $platform${NC}"
 }
 
 rekt_source_programs() {
@@ -3410,9 +3472,9 @@ export_rekt_dependencies() {
     if [[ "${REKT_PLATFORM_CONTRACTS+x}" == x ]]; then
         resource_environment+=(-e "REKT_PLATFORM_CONTRACTS=$(rekt_platform_contracts_for "$estate" container)")
     fi
-    if [[ "${REKT_SQL_DECLARATIONS+x}" == x ]]; then
-        resource_environment+=(-e "REKT_SQL_DECLARATIONS=$REKT_SQL_DECLARATIONS")
-    fi
+    local sql_declarations
+    sql_declarations="$(rekt_sql_declarations_for "$estate")"
+    [[ -z "$sql_declarations" ]] || resource_environment+=(-e "REKT_SQL_DECLARATIONS=$sql_declarations")
     if lma_cli rekt-evidence dependency-search-view \
         --staging-root "$estate_staging" --relative-path "$rel_program" 2>>"$err_log"; then
         [[ "${REKT_VERBOSE:-false}" != "true" ]] || echo "  Exporting dependencies: $rel_program"
@@ -3430,6 +3492,11 @@ export_rekt_dependencies() {
         fi
         if [[ -n "$dependency_profile" ]]; then
             export REKT_DEPENDENCY_PROFILE="$dependency_profile"
+        fi
+        if [[ -n "$sql_declarations" ]]; then
+            export REKT_SQL_DECLARATIONS="$sql_declarations"
+        else
+            unset REKT_SQL_DECLARATIONS
         fi
         lma_cli_run "$_LMA_CLI_ASSEMBLY" rekt-evidence write \
             --source-root "$REPO_ROOT/source" --relative-path "$rel_program" \
@@ -3607,7 +3674,9 @@ starforge_export_dependencies() {
     vsam_definitions="$(starforge_host_paths "$(rekt_vsam_definitions_for "$estate")")"
     [[ -z "$cics_definitions" ]] || profile_args+=(--cics-definitions "$cics_definitions")
     [[ -z "$vsam_definitions" ]] || profile_args+=(--vsam-definitions "$vsam_definitions")
-    [[ -z "${REKT_SQL_DECLARATIONS:-}" ]] || profile_args+=(--sql-declarations "$(starforge_host_paths "$REKT_SQL_DECLARATIONS")")
+    local sql_declarations
+    sql_declarations="$(rekt_sql_declarations_for "$estate")"
+    [[ -z "$sql_declarations" ]] || profile_args+=(--sql-declarations "$(starforge_host_paths "$sql_declarations")")
     [[ -z "${REKT_PLATFORM_CONTRACTS:-}" ]] || profile_args+=(--platform-contracts "$(rekt_platform_contracts_for "$estate" host)")
     if [[ "${rekt_commarea_pass:-false}" == true && -f "$REPO_ROOT/output/rekt/$estate/.commarea-closure.json" ]]; then
         profile_args+=(--commarea-closure "$REPO_ROOT/output/rekt/$estate/.commarea-closure.json")
@@ -3631,8 +3700,10 @@ starforge_export_dependencies() {
         if [[ -n "$dependency_profile" ]]; then
             export REKT_DEPENDENCY_PROFILE="$dependency_profile"
         fi
-        if [[ "${REKT_SQL_DECLARATIONS+x}" == x ]]; then
-            export REKT_SQL_DECLARATIONS="$(starforge_host_paths "$REKT_SQL_DECLARATIONS")"
+        if [[ -n "$sql_declarations" ]]; then
+            export REKT_SQL_DECLARATIONS="$(starforge_host_paths "$sql_declarations")"
+        else
+            unset REKT_SQL_DECLARATIONS
         fi
         lma_cli_run "$_LMA_CLI_ASSEMBLY" rekt-evidence write \
             --source-root "$REPO_ROOT/source" --relative-path "$rel_program" \
@@ -3955,6 +4026,7 @@ run_rekt_parse_impl() {
             fi
         fi
 
+        rekt_print_estate_inputs "$estate"
         local estate_identity=""
         if ! estate_identity=$(REKT_SOURCE_TOP_LEVEL_ONLY="$estate_top_only" lma_cli rekt-source-identity \
             "$estate_dir" "$preprocessed_dir" "$shadowed_copybooks_file"); then

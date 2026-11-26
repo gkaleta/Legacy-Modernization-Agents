@@ -204,7 +204,16 @@ database verification, Java SQL adapters or transaction-equivalence claims.
 Generation receives these records as mandatory implementation requirements;
 target runtime behavior still needs separate verification.
 
-Set `REKT_DEPENDENCY_PROFILE` explicitly to use a target-analysis profile.
+Doctor finds each estate's own inputs without settings: CICS resource definitions
+(`*.csd`, and YAML files with a `resourceDefinitions:` section) and Db2 table
+declarations (non-program files holding `EXEC SQL DECLARE … TABLE`). It also uses
+the built-in `contracts/ibm-platform-services-v1.json` profile (documented Language
+Environment, IMS and Db2 services) and `contracts/cics-terminal-and-bms-v1.json`.
+`REKT_CICS_RESOURCE_DEFINITIONS`, `REKT_SQL_DECLARATIONS`, `REKT_DEPENDENCY_PROFILE`
+and `REKT_PLATFORM_CONTRACTS` only override these defaults; `none` switches the
+profile, the platform contracts or SQL discovery off.
+
+Set `REKT_DEPENDENCY_PROFILE` to use another target-analysis profile.
 Patch `0017` can qualify an otherwise-unbound SQL relation against that profile's
 chosen schema, but only when an actual matching parsed declaration exists.
 `contracts/bank-of-z-spring-h2-v2.json` selects STTESTER for the new target and supplies
@@ -215,10 +224,12 @@ are checked by evidence generation, cache validation and the conversion gate.
 This is not evidence of the original DB2 configuration or implemented Java behavior.
 
 An estate can carry its own profile at `contracts/estates/<estate>.json`. Doctor uses it
-instead of `REKT_DEPENDENCY_PROFILE` for that estate only, so contracts and the SQL
-default schema are never borrowed across estates. `contracts/estates/carddemo.json`
-declares only the documented CEE3ABD contract and no default schema, because
-CardDemo qualifies its tables explicitly.
+instead of the built-in or configured profile for that estate only, so contracts and the SQL
+default schema are never borrowed across estates. Because it replaces the built-in profile,
+an estate profile must also carry every entry of `ibm-platform-services-v1.json` unchanged
+(a test enforces this). `contracts/estates/carddemo.json` adds CardDemo's own assembler
+routines and no default schema, because CardDemo qualifies its tables explicitly.
+`contracts/estates/bank-of-z.json` selects the STTESTER schema for the new target.
 
 To run the full parse-and-ingest pipeline for Bank-of-Z only, keep the full source
 tree available for dependency resolution and pass exact source-relative selectors:
@@ -226,11 +237,7 @@ tree available for dependency resolution and pass exact source-relative selector
 ```bash
 bank_programs=$(find source/bank-of-z/cobol -maxdepth 1 -type f -iname '*.cbl' \
   | sed 's#^source/##' | sort | paste -sd, -)
-_REKT_PROGRAM_FILTER="$bank_programs" \
-REKT_CICS_RESOURCE_DEFINITIONS=/source/bank-of-z/cics/bank-of-z-definitions.yaml \
-REKT_SQL_DECLARATIONS=/source/bank-of-z/copy/CONTDB2.cpy \
-REKT_DEPENDENCY_PROFILE="$PWD/tools/cobol-rekt/contracts/bank-of-z-spring-h2-v2.json" \
-  ./doctor.sh rekt-full
+_REKT_PROGRAM_FILTER="$bank_programs" ./doctor.sh rekt-full
 ```
 
 Use a container built with the current patch chain; building an image does not

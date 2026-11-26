@@ -95,6 +95,142 @@ public sealed class DoctorRektDependencyExportTests : IDisposable
     }
 
     [Fact]
+    public void EstateCicsResources_FindResourceDefinitionYaml_AlsoForASingleEstate()
+    {
+        var function = Between("rekt_cics_resources_for() {", "\nrekt_source_programs() {");
+        void Write(string path, string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(Root, path))!);
+            File.WriteAllText(Path.Join(Root, path), text);
+        }
+
+        Write("source/bank-of-z/cics/bank-defs.yaml", "# schema\nresourceDefinitions:\n  - program:\n      name: P1\n");
+        Write("source/bank-of-z/cics/other.yml", "jobs:\n  resourceDefinitions: no\n");
+        Write("source/bank-of-z/.preprocessed/old.yaml", "resourceDefinitions:\n");
+        Write("source/bank-of-z/csd/REGION.csd", "");
+        var env = DoctorFixture.ScrubbedEnvironment();
+        env["REPO_ROOT"] = DoctorFixture.Posix(Root);
+
+        var output = Bash(env, function + "\nfor estate in bank-of-z .all .root; do echo \"[$(rekt_cics_resources_for \"$estate\")]\"; done");
+
+        output.Should().Equal("[/source/bank-of-z/cics/bank-defs.yaml:/source/bank-of-z/csd/REGION.csd]",
+            "[/source/bank-of-z/cics/bank-defs.yaml:/source/bank-of-z/csd/REGION.csd]", "[]");
+    }
+
+    [Theory]
+    [InlineData(null, null, true, "{dir}/ibm-platform-services-v1.json", "{dir}/cics-terminal-and-bms-v1.json")]
+    [InlineData(null, null, false, "unset", "unset")]
+    [InlineData("/configured.json", null, true, "/configured.json", "/configured.json")]
+    [InlineData(null, "none", true, "", "")]
+    [InlineData(null, "", true, "", "")]
+    public void BuiltInPlatformKnowledge_IsOnByDefault_AndSettingsOnlyOverrideIt(
+        string? configured, string? shellOverride, bool shipped, string expectedProfile, string expectedContracts)
+    {
+        var settings = DoctorScript.Split("# Optional dependency inputs preserve an explicitly empty shell override.\n", 2)[1]
+            .Split("# A moved port", 2)[0];
+        var contracts = Path.Join(Root, "contracts");
+        Directory.CreateDirectory(contracts);
+        if (shipped)
+            foreach (var name in new[] { "ibm-platform-services-v1.json", "cics-terminal-and-bms-v1.json" })
+                File.WriteAllText(Path.Join(contracts, name), "{}");
+        var env = DoctorFixture.ScrubbedEnvironment();
+        env["REKT_CONTRACTS_DIR"] = DoctorFixture.Posix(contracts);
+        env["CONFIGURED_INPUT"] = configured ?? "";
+        if (shellOverride is not null)
+            foreach (var key in new[] { "REKT_DEPENDENCY_PROFILE", "REKT_PLATFORM_CONTRACTS" })
+                env[key] = shellOverride;
+
+        var output = Bash(env, "read_local_config_value() { printf \"%s\" \"$CONFIGURED_INPUT\"; }\n" + settings
+            + "\nbash -c 'printf \"%s\\n\" \"${REKT_DEPENDENCY_PROFILE-unset}\" \"${REKT_PLATFORM_CONTRACTS-unset}\"'");
+
+        var dir = DoctorFixture.Posix(contracts);
+        output.Should().Equal(expectedProfile.Replace("{dir}", dir), expectedContracts.Replace("{dir}", dir));
+    }
+
+    [Fact]
+    public void EstateSqlDeclarations_AreFoundInDeclarationFilesOnly_UnlessConfigured()
+    {
+        var function = Between("rekt_sql_declarations_for() {", "\nrekt_source_programs() {");
+        void Write(string path, string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(Root, path))!);
+            File.WriteAllText(Path.Join(Root, path), text);
+        }
+
+        const string declare = "           EXEC SQL DECLARE ACCOUNT TABLE\n             ( ID CHAR(8) NOT NULL ) END-EXEC.\n";
+        Write("source/bank-of-z/db2/ACCDB2.cpy", declare);
+        Write("source/bank-of-z/db2/dclgen/CUSTDB2.dcl", declare.Replace("ACCOUNT", "CUSTOMER").ToLowerInvariant());
+        Write("source/bank-of-z/cobol/INLINE.cbl", "       WORKING-STORAGE SECTION.\n" + declare + "       PROCEDURE DIVISION.\n");
+        Write("source/bank-of-z/copy/CURSOR.cpy", "           EXEC SQL DECLARE C1 CURSOR FOR SELECT 1 END-EXEC.\n");
+        Write("source/bank-of-z/.preprocessed/ACCDB2.cpy", declare);
+        Write("source/other/copy/PLAIN.cpy", "       01 X PIC X.\n");
+        var env = DoctorFixture.ScrubbedEnvironment();
+        env["REPO_ROOT"] = DoctorFixture.Posix(Root);
+        const string each = "\nfor estate in bank-of-z other .all .root missing; do echo \"[$(rekt_sql_declarations_for \"$estate\")]\"; done";
+
+        Bash(env, function + each).Should().Equal(
+            "[/source/bank-of-z/db2/ACCDB2.cpy:/source/bank-of-z/db2/dclgen/CUSTDB2.dcl]", "[]",
+            "[/source/bank-of-z/db2/ACCDB2.cpy:/source/bank-of-z/db2/dclgen/CUSTDB2.dcl]", "[]", "[]");
+
+        env["REKT_SQL_DECLARATIONS"] = "/source/bank-of-z/db2/ACCDB2.cpy";
+        Bash(env, function + each).Should().AllBe("[/source/bank-of-z/db2/ACCDB2.cpy]");
+        env["REKT_SQL_DECLARATIONS"] = "none";
+        Bash(env, function + each).Should().AllBe("[]");
+    }
+
+    [Fact]
+    public void EstateProfiles_CarryEveryBuiltInIbmService_BecauseTheyReplaceTheBuiltInProfile()
+    {
+        var contracts = Path.Join(DoctorFixture.RepoRoot, "tools", "cobol-rekt", "contracts");
+        var builtIn = JsonNode.Parse(File.ReadAllText(Path.Join(contracts, "ibm-platform-services-v1.json")))!["runtimeContracts"]!.AsObject();
+        builtIn.Select(entry => entry.Value!["kind"]!.GetValue<string>()).Should().AllBe("documented-platform-service");
+        var estates = Directory.GetFiles(Path.Join(contracts, "estates"), "*.json");
+        estates.Should().NotBeEmpty();
+
+        foreach (var file in estates)
+        {
+            var own = JsonNode.Parse(File.ReadAllText(file))!["runtimeContracts"]!.AsObject();
+            foreach (var (name, contract) in builtIn)
+                JsonNode.DeepEquals(own[name], contract).Should().BeTrue($"{Path.GetFileName(file)} must carry built-in {name} unchanged");
+            own.Where(entry => entry.Value!["kind"]!.GetValue<string>() == "documented-platform-service")
+                .Select(entry => entry.Key).Should().BeSubsetOf(builtIn.Select(entry => entry.Key),
+                    $"{Path.GetFileName(file)} documents an IBM service the built-in profile lacks; add it there too");
+        }
+    }
+
+    [Fact]
+    public void EstateInputs_SummaryLine_SaysWhatWasFoundAndWhatCameFromSettings()
+    {
+        var functions = Between("rekt_dependency_profile_for() {", "\nrekt_source_programs() {");
+        void Write(string path, string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(Root, path))!);
+            File.WriteAllText(Path.Join(Root, path), text);
+        }
+
+        var contracts = Path.Join(Root, "tools/cobol-rekt/contracts");
+        Write("tools/cobol-rekt/contracts/estates/bank-of-z.json", "{}");
+        Write("source/bank-of-z/cics/defs.yaml", "resourceDefinitions:\n");
+        Write("source/bank-of-z/copy/ACCDB2.cpy", "           EXEC SQL DECLARE ACCOUNT TABLE ( ID CHAR(8) ) END-EXEC.\n");
+        Write("source/bank-of-z/jcl/DEFVSAM.jcl", "//S1 EXEC PGM=IDCAMS\n");
+        Directory.CreateDirectory(Path.Join(Root, "source/plain"));
+        var env = DoctorFixture.ScrubbedEnvironment();
+        env["REPO_ROOT"] = DoctorFixture.Posix(Root);
+        env["REKT_DEPENDENCY_PROFILE"] = DoctorFixture.Posix(Path.Join(contracts, "ibm-platform-services-v1.json"));
+        env["REKT_PLATFORM_CONTRACTS"] = DoctorFixture.Posix(Path.Join(contracts, "cics-terminal-and-bms-v1.json"));
+
+        Bash(env, "BLUE=; NC=\n" + functions + "\nrekt_print_estate_inputs bank-of-z; rekt_print_estate_inputs plain").Should().Equal(
+            "  [bank-of-z] Found: CICS definitions: 1 file(s) · Db2 declarations: 1 file(s) · VSAM (IDCAMS JCL): 1 file(s) · IBM services: estate (bank-of-z.json) · DFHAID/DFHBMSCA: built-in",
+            "  [plain] Found: CICS definitions: none · Db2 declarations: none · VSAM (IDCAMS JCL): none · IBM services: built-in · DFHAID/DFHBMSCA: built-in");
+
+        env["REKT_SQL_DECLARATIONS"] = "none";
+        env["REKT_DEPENDENCY_PROFILE"] = "/elsewhere/site.json";
+        env["REKT_PLATFORM_CONTRACTS"] = "";
+        Bash(env, "BLUE=; NC=\n" + functions + "\nrekt_print_estate_inputs plain").Should().Equal(
+            "  [plain] Found: CICS definitions: none · Db2 declarations: none (setting) · VSAM (IDCAMS JCL): none · IBM services: setting (site.json) · DFHAID/DFHBMSCA: off");
+    }
+
+    [Fact]
     public void Doctor_ExportsAfterSuccessfulStructuralParse()
     {
         var (current, calls) = RunDoctor(structuralSuccess: true);

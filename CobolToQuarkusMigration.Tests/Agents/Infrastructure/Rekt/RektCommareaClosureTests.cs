@@ -248,7 +248,7 @@ public sealed class RektRuntimeContractProfileTests : RektEvidenceFixture
     {
         var profile = PyJson.ReadFile(CardDemoProfile)!;
         profile["runtimeContracts"]!.AsObject().Select(pair => pair.Key)
-            .Should().BeEquivalentTo("CEE3ABD", "CEEDAYS", "CBLTDLI", "DSNTIAC", "MVSWAIT", "COBDATFT");
+            .Should().BeEquivalentTo("CEE3ABD", "CEEDAYS", "CBLTDLI", "DSNTIAC", "MVSWAIT", "COBDATFT", "CEEDATM", "CEEGMT", "CEELOCT");
         var bank = PyJson.ReadFile(Path.Join(Repo, "tools", "cobol-rekt", "contracts", "bank-of-z-spring-h2-v2.json"))!;
         PyJson.PyEquals(bank["runtimeContracts"]!["CEEDAYS"], profile["runtimeContracts"]!["CEEDAYS"]).Should().BeTrue();
         profile.AsObject().ContainsKey("sqlDefaultSchema").Should().BeFalse();

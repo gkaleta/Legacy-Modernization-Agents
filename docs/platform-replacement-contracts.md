@@ -15,8 +15,12 @@ It supplies no IBM byte values, binary layout or banking-action mapping.
 The IBM CICS documentation index is a general platform reference, not evidence
 that a particular application's behavior or target adapter has been verified.
 
-With native patch 0027 installed, opt in using an absolute path accessible at
-the same location on the host and inside the parser container:
+Doctor uses `contracts/cics-terminal-and-bms-v1.json` (DFHAID screen keys and
+DFHBMSCA attributes) by default, so every estate gets the same IBM platform
+knowledge without a setting. `REKT_PLATFORM_CONTRACTS` only overrides it: point it
+at another contract (an absolute path visible at the same location on the host and
+inside the parser container; REKT needs native patch 0027), or set it to `none` to
+switch platform contracts off:
 
 ```bash
 export REKT_PLATFORM_CONTRACTS="$PWD/tools/cobol-rekt/contracts/cics-terminal-events-v1.json"
@@ -25,7 +29,7 @@ export REKT_PLATFORM_CONTRACTS="$PWD/tools/cobol-rekt/contracts/cics-terminal-ev
 
 The setting can alternatively be placed in `Config/ai-config.local.env` using
 its absolute path. Existing licensed, supplied DFHAID definitions take
-precedence. No contract is selected by default.
+precedence.
 
 Preprocessing creates a marked, analysis-only declaration projection without
 VALUE clauses. Its profile, bytes, staging provenance and native syntax are

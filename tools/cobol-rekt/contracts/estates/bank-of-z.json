@@ -1,0 +1,288 @@
+{
+  "schemaVersion": 1,
+  "profileName": "bank-of-z-spring-h2-v2",
+  "profileKind": "target-port",
+  "sqlDefaultSchema": "STTESTER",
+  "runtimeContracts": {
+    "CEEGMT": {
+      "kind": "documented-platform-service",
+      "platform": "IBM z/OS Language Environment",
+      "documentation": [
+        "https://www.ibm.com/docs/en/zos/3.1.0?topic=services-ceegmtget-current-greenwich-mean-time"
+      ],
+      "parameters": [
+        {
+          "name": "output_GMT_Lilian",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "signed 32-bit binary integer",
+          "meaning": "GMT days since 14 October 1582"
+        },
+        {
+          "name": "output_GMT_seconds",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "64-bit floating point",
+          "meaning": "GMT seconds since midnight 14 October 1582, excluding leap seconds"
+        },
+        {
+          "name": "fc",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "12-byte Language Environment feedback token"
+        }
+      ],
+      "semantics": {
+        "timeZone": "UTC",
+        "successCondition": "CEE000",
+        "unavailableCondition": "CEE2E6",
+        "failureOutputs": "Both numeric outputs are zero when GMT is unavailable.",
+        "feedback": "Preserve the documented feedback condition; do not invent a zero-filled successful token."
+      }
+    },
+    "CEEDATM": {
+      "kind": "documented-platform-service",
+      "platform": "IBM z/OS Language Environment",
+      "documentation": [
+        "https://www.ibm.com/docs/en/zos/3.1.0?topic=services-ceedatmconvert-seconds-character-timestamp"
+      ],
+      "parameters": [
+        {
+          "name": "input_seconds",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "64-bit floating point",
+          "meaning": "Seconds since midnight 14 October 1582, excluding leap seconds"
+        },
+        {
+          "name": "picture_string",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "VSTRING: halfword binary length followed by picture characters"
+        },
+        {
+          "name": "output_timestamp",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "80-character fixed-width output"
+        },
+        {
+          "name": "fc",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "12-byte Language Environment feedback token"
+        }
+      ],
+      "semantics": {
+        "minimumSeconds": 86400,
+        "maximumSeconds": 265621679999.999,
+        "successCondition": "CEE000",
+        "invalidSecondsCondition": "CEE2E9",
+        "invalidPictureCondition": "CEE2EM",
+        "truncationCondition": "CEE2EV",
+        "blankPicture": "Uses the Language Environment COUNTRY runtime option; no locale is inferred by this profile.",
+        "failureOutput": "Invalid input produces blank output and non-CEE000 feedback.",
+        "picture": "Implement the documented picture language. The caller's supplied picture is authoritative."
+      }
+    },
+    "CEEDAYS": {
+      "kind": "documented-platform-service",
+      "platform": "IBM z/OS Language Environment",
+      "documentation": [
+        "https://www.ibm.com/docs/en/zos/3.1.0?topic=services-ceedaysconvert-date-lilian-format"
+      ],
+      "parameters": [
+        {
+          "name": "input_char_date",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "VSTRING: halfword binary length followed by 5 to 255 date characters"
+        },
+        {
+          "name": "picture_string",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "VSTRING: halfword binary length followed by picture characters"
+        },
+        {
+          "name": "output_Lilian_date",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "signed 32-bit binary integer",
+          "meaning": "Days since 14 October 1582"
+        },
+        {
+          "name": "fc",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "12-byte Language Environment feedback token"
+        }
+      ],
+      "semantics": {
+        "calendar": "Gregorian; valid dates are 15 October 1582 through 31 December 9999.",
+        "successCondition": "CEE000",
+        "failureOutput": "An invalid input date produces zero Lilian days and non-CEE000 feedback.",
+        "picture": "Preserve the supplied picture language and documented leading/trailing character handling.",
+        "centuryWindow": "Two-digit years depend on the runtime century window, configurable through CEESCEN. Do not silently substitute a target date library's default window.",
+        "compilerContext": "COBOL intrinsic date arithmetic requires the original INTDATE setting; this profile does not infer it."
+      }
+    },
+    "CEELOCT": {
+      "kind": "documented-platform-service",
+      "platform": "IBM z/OS Language Environment",
+      "documentation": [
+        "https://www.ibm.com/docs/en/zos/3.1.0?topic=services-ceeloctget-current-local-date-time"
+      ],
+      "parameters": [
+        {
+          "name": "output_Lilian",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "signed 32-bit binary integer",
+          "meaning": "Local days since 14 October 1582"
+        },
+        {
+          "name": "output_seconds",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "64-bit floating point",
+          "meaning": "Local seconds since midnight 14 October 1582, excluding leap seconds"
+        },
+        {
+          "name": "output_Gregorian",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "17-byte fixed-length character string YYYYMMDDHHMISS999"
+        },
+        {
+          "name": "fc",
+          "passing": "BY REFERENCE",
+          "direction": "out",
+          "representation": "12-byte Language Environment feedback token"
+        }
+      ],
+      "semantics": {
+        "timeZone": "Runtime-local time; the original deployment time zone must be supplied rather than inferred as UTC.",
+        "successCondition": "CEE000",
+        "unavailableCondition": "CEE2F3",
+        "failureOutputs": "Unavailable local time produces zero numeric outputs and non-CEE000 feedback; no successful character timestamp is fabricated.",
+        "outputConsistency": "The day count, seconds and formatted timestamp represent the same local date/time."
+      }
+    },
+    "CBLTDLI": {
+      "kind": "documented-platform-service",
+      "platform": "IBM IMS",
+      "documentation": [
+        "https://www.ibm.com/docs/en/SSEPH2_15.4.0/com.ibm.ims154.doc.apg/ims_imsdbcobolapp.htm"
+      ],
+      "parameters": [
+        {
+          "name": "function",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "4-byte display call function, left-justified and blank-padded (for example GU, GN, GNP, ISRT)"
+        },
+        {
+          "name": "db pcb",
+          "passing": "BY REFERENCE",
+          "direction": "inout",
+          "representation": "database or GSAM PCB group item from the PSB passed on entry; IMS sets its status code and key feedback"
+        },
+        {
+          "name": "i/o area",
+          "passing": "BY REFERENCE",
+          "direction": "inout",
+          "representation": "segment I/O area large enough for the returned data"
+        },
+        {
+          "name": "ssa",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "optional display segment search arguments; up to 15 may follow the I/O area",
+          "occurrence": "0..15"
+        }
+      ],
+      "semantics": {
+        "interface": "DL/I call through the IMS language interface (DFSLI000); the optional leading parmcount is not used by these call sites.",
+        "dataModel": "Segment hierarchy, keys and GSAM datasets come from the estate's DBD and PSB sources (app-authorization-ims-db2-mq/ims); this contract does not infer them.",
+        "status": "Each call's outcome is the PCB status code; blank means success, GE/GB mean not found / end of database. Preserve the caller's status checks.",
+        "target": "Map to an implementation that preserves hierarchical GU/GN/GNP/ISRT positioning per PCB; do not reorder or batch calls."
+      }
+    },
+    "CEE3ABD": {
+      "kind": "documented-platform-service",
+      "platform": "IBM z/OS Language Environment",
+      "documentation": [
+        "https://www.ibm.com/docs/en/zos/3.1.0?topic=services-cee3abdterminate-enclave-abend"
+      ],
+      "parameters": [
+        {
+          "name": "abcode",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "fullword binary integer",
+          "meaning": "Abend code to issue, no greater than 4095"
+        },
+        {
+          "name": "clean-up",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "fullword binary integer",
+          "meaning": "0 abends without clean-up; 1 to 5 abend with enclave termination processing and the documented CEEDUMP/system dump variations; illegal values abend without clean-up"
+        }
+      ],
+      "semantics": {
+        "control": "No return to the caller; the enclave terminates with the supplied abend code.",
+        "condition": "No condition or feedback token is associated with this service.",
+        "cleanUp": "Preserve the caller's clean-up value; termination handlers, dumps and user exits depend on it and on the TERMTHDACT runtime option, which this profile does not infer.",
+        "target": "Map to an abnormal process or job termination that carries the abend code; do not convert it into a recoverable exception that returns to the caller."
+      }
+    },
+    "DSNTIAC": {
+      "kind": "documented-platform-service",
+      "platform": "IBM Db2 for z/OS",
+      "documentation": [
+        "https://www.ibm.com/docs/en/db2-for-zos/13.0.0?topic=statements-handling-sql-error-codes-in-cobol-applications"
+      ],
+      "parameters": [
+        {
+          "name": "eib",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "CICS EXEC interface block (DFHEIBLK)"
+        },
+        {
+          "name": "commarea",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "CICS communication area (DFHCOMMAREA)"
+        },
+        {
+          "name": "sqlca",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "SQL communication area whose SQLCODE and tokens are formatted"
+        },
+        {
+          "name": "message",
+          "passing": "BY REFERENCE",
+          "direction": "inout",
+          "representation": "VARCHAR output area: leading halfword gives the remaining length (minimum 240); text lines of lrecl bytes follow"
+        },
+        {
+          "name": "lrecl",
+          "passing": "BY REFERENCE",
+          "direction": "in",
+          "representation": "fullword binary logical record length of each output line, 72-240"
+        }
+      ],
+      "semantics": {
+        "interface": "Db2-supplied assembler subroutine (SDSNSAMP) for CICS programs that need CICS storage handling; formats the SQLCA the same way as DSNTIAR.",
+        "callSite": "COTRTLIC reaches it through CALL LIT-DSNTIAC (copybook CSDB2RPY), where LIT-DSNTIAC is a never-modified PIC X(7) VALUE 'DSNTIAC'.",
+        "quirk": "CardDemo passes WS-DSNTIAC-LRECL as PIC S9(4) COMP (a halfword, VALUE +72) where the documented parameter is a fullword; on z/OS the routine reads the following two bytes too. Preserve the intended 72-byte line length and report the defect rather than reproducing storage overlap.",
+        "status": "RETURN-CODE is set by the routine; the caller treats zero as success and otherwise reports 'DSNTIAC CD'.",
+        "target": "Map to the target's SQL diagnostic text (for example SQLException message) split into lrecl-sized lines in the message area."
+      }
+    }
+  }
+}
