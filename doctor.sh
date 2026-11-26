@@ -5429,8 +5429,12 @@ show_dry_run() {
     if [[ "${TARGET_LANGUAGE:-Java}" == "Java" ]]; then
         echo -e "  Java framework: ${GREEN}${JAVA_FRAMEWORK:-Quarkus}${NC}"
     fi
-    echo -e "  Programs (${#SELECTED_PROGRAMS[@]}):"
-    printf '    %s\n' "${SELECTED_PROGRAMS[@]}"
+    if [[ ${#SELECTED_PROGRAMS[@]} -eq 0 ]]; then
+        echo -e "  Programs: every program in the source folder (no --program or --job given)"
+    else
+        echo -e "  Programs (${#SELECTED_PROGRAMS[@]}):"
+        printf '    %s\n' "${SELECTED_PROGRAMS[@]}"
+    fi
     echo ""
     echo -e "  ${BLUE}All copybooks are included regardless of selection.${NC}"
     echo -e "  Remove ${GREEN}--dry-run${NC} to convert."

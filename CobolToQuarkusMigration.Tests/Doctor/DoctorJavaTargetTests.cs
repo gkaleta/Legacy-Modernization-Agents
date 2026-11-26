@@ -20,6 +20,8 @@ public sealed class DoctorJavaFrameworkTests : IDisposable
 
         result.ShouldSucceed();
         result.StdOut.Should().Contain("Spring");
+        result.StdOut.Should().Contain("every program in the source folder");
+        result.StdOut.Should().NotContain("Programs (0)");
         _doctor.Calls("dotnet").Should().NotContain(args => args.Contains("build"));
     }
 
