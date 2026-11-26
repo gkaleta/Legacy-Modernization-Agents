@@ -62,6 +62,7 @@ public sealed class JavaProjectScaffoldTests : IDisposable
             .And.Contain("<artifactId>quarkus-hibernate-orm-panache</artifactId>")
             .And.Contain("<mainClass>com.x.jobs.JclBatchApplication</mainClass>")
             .And.Contain("<exclude>target/**</exclude>")
+            .And.Contain("<arg>-Xmaxerrs</arg>")
             .And.NotContain("jakarta.ws.rs-api")
             .And.NotContain("jakarta.inject-api");
         File.ReadAllText(Path.Join(_run, "application.properties")).Should().Contain("jcl.datasets.root=");

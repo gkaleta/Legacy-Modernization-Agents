@@ -690,6 +690,29 @@ public sealed class AiLoopReaderTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task JavaCompileGateShowsErrorCountPerRepairRound()
+    {
+        ACompletedRun(targetLanguage: "Java Spring Boot");
+        object Errors(int n) => Enumerable.Range(1, n).Select(i => new { File = "A.java", Line = i, Code = "javac", Message = "x" }).ToArray();
+        Artifact("java-compile-status.json", JsonSerializer.Serialize(new
+        {
+            Compiled = false, Measured = true, ExitCode = 1, RepairRounds = 2, Errors = Errors(3),
+            Rounds = new object[]
+            {
+                new { Round = 0, Compiled = false, ExitCode = 1, RolledBack = false, Errors = Errors(100) },
+                new { Round = 1, Compiled = false, ExitCode = 1, RolledBack = false, Errors = Errors(3) },
+                new { Round = 2, Compiled = false, ExitCode = 1, RolledBack = true, Errors = Errors(5) },
+            },
+        }));
+
+        var gate = Gate(await Reader().GetRunAsync("7"), "compile");
+
+        Assert.Contains("Round 0: 100 errors (javac may have stopped listing at 100), exit 1", gate.Details);
+        Assert.Contains("Round 1: 3 error(s), exit 1", gate.Details);
+        Assert.Contains("Round 2: 5 error(s), exit 1, rolled back", gate.Details);
+    }
+
     [Theory]
     [InlineData("warn", "warn")]
     [InlineData("fail", "fail")]

@@ -102,7 +102,7 @@ public class MigrationProcess
         var targetLang = _settings.ApplicationSettings.TargetLanguage;
         var targetName = targetLang == TargetLanguage.CSharp ? "C#" : JavaGeneration.TargetName(_settings.ConversionSettings);
 
-        _enhancedLogger.ShowStep(2, 3, $"{targetName}ConverterAgent", $"Converting COBOL to {targetName}");
+        _enhancedLogger.ShowStep(2, 3, $"{targetName} converter", $"Converting COBOL to {targetName}");
         if (targetLang == TargetLanguage.CSharp)
         {
             _codeConverterAgent = CSharpConverterAgent.Create(

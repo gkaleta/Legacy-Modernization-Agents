@@ -143,7 +143,9 @@ public static class JavaProjectScaffold
         sb.Append("    <plugins>\n");
         sb.Append("      <plugin>\n        <groupId>org.apache.maven.plugins</groupId>\n        <artifactId>maven-compiler-plugin</artifactId>\n");
         sb.Append("        <version>3.14.1</version>\n");
-        sb.Append("        <configuration>\n          <excludes>\n            <exclude>target/**</exclude>\n          </excludes>\n        </configuration>\n      </plugin>\n");
+        // javac lists at most 100 errors by default; the compile gate needs the real count to judge a repair round.
+        sb.Append("        <configuration>\n          <compilerArgs>\n            <arg>-Xmaxerrs</arg>\n            <arg>10000</arg>\n          </compilerArgs>\n");
+        sb.Append("          <excludes>\n            <exclude>target/**</exclude>\n          </excludes>\n        </configuration>\n      </plugin>\n");
         if (mainClass is not null)
         {
             sb.Append("      <plugin>\n        <groupId>org.springframework.boot</groupId>\n        <artifactId>spring-boot-maven-plugin</artifactId>\n");

@@ -752,7 +752,7 @@ public sealed partial class AiLoopReader
                 $"{PropertyText(e, "File")}:{PropertyText(e, "Line")} {PropertyText(e, "Code")}").ToList();
             if (root.TryGetProperty("Rounds", out var history) && history.ValueKind == JsonValueKind.Array)
                 details.AddRange(history.EnumerateArray().Where(r => r.ValueKind == JsonValueKind.Object).TakeLast(20)
-                    .Select(r => $"Round {PropertyText(r, "Round")}: compiled {PropertyText(r, "Compiled")}, exit {PropertyText(r, "ExitCode")}, rolled back {PropertyText(r, "RolledBack")}"));
+                    .Select(r => $"Round {PropertyText(r, "Round")}: {RoundErrors(r)}, exit {PropertyText(r, "ExitCode")}{(r.TryGetProperty("RolledBack", out var back) && back.ValueKind == JsonValueKind.True ? ", rolled back" : "")}"));
             if (root.TryGetProperty("ExitCode", out var exit) && exit.ValueKind == JsonValueKind.Number)
                 details.Add($"Build exit code: {exit}");
             return compiled.GetBoolean()
@@ -765,6 +765,15 @@ public sealed partial class AiLoopReader
         {
             return new(id, title, "warn", "java-compile-status.json could not be read", [], Rel(path));
         }
+    }
+
+    // Projects scaffolded before -Xmaxerrs was set report at most 100 errors per javac run.
+    private static string RoundErrors(JsonElement round)
+    {
+        if (round.TryGetProperty("Compiled", out var ok) && ok.ValueKind == JsonValueKind.True) return "compiled";
+        if (!round.TryGetProperty("Errors", out var list) || list.ValueKind != JsonValueKind.Array) return "did not compile";
+        var count = list.GetArrayLength();
+        return count == 100 ? "100 errors (javac may have stopped listing at 100)" : $"{count} error(s)";
     }
 
     private static string PropertyText(JsonElement element, string name)
