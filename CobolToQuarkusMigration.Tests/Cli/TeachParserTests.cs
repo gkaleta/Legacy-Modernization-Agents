@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using CobolToQuarkusMigration.Cli;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
@@ -59,13 +60,14 @@ public sealed class TeachParserTests : IDisposable
         public void Dispose() { }
     }
 
-    private async Task<(string Output, FakeClient Client, bool Created)> Run(string answers, string aiAnswer)
+    private async Task<(string Output, FakeClient Client, bool Created)> Run(string answers, string aiAnswer, string? journalRoot = null)
     {
         var client = new FakeClient(aiAnswer);
         var created = false;
         var output = new StringWriter();
         var exit = await new TeachParser(new StringReader(answers), output).RunAsync([_estate], _rulesPath, DialectRules.Empty,
-            () => new TeachAiEndpoint("AzureOpenAI", "https://example.invalid", "test-model", () => { created = true; return client; }));
+            () => new TeachAiEndpoint("AzureOpenAI", "https://example.invalid", "test-model", () => { created = true; return client; }),
+            journalRoot: journalRoot);
         exit.Should().Be(0, output.ToString());
         return (output.ToString(), client, created);
     }
@@ -130,6 +132,48 @@ public sealed class TeachParserTests : IDisposable
 
         TeachParserCommand.LoadRules(_rulesPath).NotProgram("est/cobol/TXDEFS.cbl").Should().NotBeNull();
         output.Should().Contain("Excludes 1 file(s) as not programs.");
+    }
+
+    private JsonNode Journal(string root)
+        => JsonNode.Parse(File.ReadAllText(Directory.GetFiles(root, TeachJournal.FileName, SearchOption.AllDirectories).Should().ContainSingle().Subject))!;
+
+    [Fact]
+    public async Task TheJournalRecordsWhatWasSentTheAnswerTheCheckAndTheChoice()
+    {
+        IncludeProgram();
+        var journalRoot = Path.Combine(_root, "journal");
+
+        var (_, client, _) = await Run("y\ny\n", """{"category":"dialect-rule","explanation":"Panvalet include.","rule":{"kind":"copyAlias"}}""", journalRoot);
+
+        var doc = Journal(journalRoot);
+        doc["activityKind"]!.GetValue<string>().Should().Be("teach-parser");
+        doc["status"]!.GetValue<string>().Should().Be("completed");
+        doc["endpoint"]!["model"]!.GetValue<string>().Should().Be("test-model");
+        doc["before"]!["places"]!.GetValue<int>().Should().Be(1);
+        doc["after"]!["places"]!.GetValue<int>().Should().Be(0);
+        var group = doc["groups"]!.AsArray().Should().ContainSingle().Subject!;
+        group["prompt"]!.GetValue<string>().Should().Be(client.Prompts.Single());
+        group["decision"]!.GetValue<string>().Should().Be("sent");
+        group["category"]!.GetValue<string>().Should().Be("dialect-rule");
+        group["ruleId"]!.GetValue<string>().Should().Be("copy-include");
+        group["check"]!["passed"]!.GetValue<bool>().Should().BeTrue();
+        group["saved"]!.GetValue<bool>().Should().BeTrue();
+        doc["savedRules"]!.AsArray().Select(n => n!.GetValue<string>()).Should().Equal("copy-include");
+    }
+
+    [Fact]
+    public async Task QuittingIsRecordedAsStoppedWithNothingSent()
+    {
+        IncludeProgram();
+        var journalRoot = Path.Combine(_root, "journal");
+
+        await Run("q\n", "{}", journalRoot);
+
+        var doc = Journal(journalRoot);
+        doc["status"]!.GetValue<string>().Should().Be("stopped");
+        var group = doc["groups"]!.AsArray().Should().ContainSingle().Subject!;
+        group["decision"]!.GetValue<string>().Should().Be("quit");
+        group["answer"].Should().BeNull();
     }
 
     [Fact]

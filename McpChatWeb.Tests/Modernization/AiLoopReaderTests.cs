@@ -52,6 +52,61 @@ public sealed class AiLoopReaderTests : IDisposable
         return path;
     }
 
+    private void TeachJournal(string folder, object journal)
+    {
+        var path = Path.Combine(_root, "output", "teach-parser", folder);
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "teach.json"), JsonSerializer.Serialize(journal));
+    }
+
+    [Fact]
+    public async Task TeachParserRunsAreListedWithWhatWasSentAndDecided()
+    {
+        TeachJournal("teach-1", new
+        {
+            schemaVersion = 1, activityKind = "teach-parser", name = "teach-1", status = "completed",
+            startedAt = T0, updatedAt = T0.AddMinutes(2), finishedAt = T0.AddMinutes(2),
+            endpoint = new { service = "AzureOpenAI", endpoint = "https://example.invalid", model = "m1" },
+            before = new { programs = 3, places = 2, groups = 2 }, after = new { programs = 3, places = 1, groups = 1 },
+            savedRules = new[] { "copy-include" },
+            groups = new object[]
+            {
+                new { label = "++INCLUDE", code = "unknown-statement", places = 1, programs = 1, prompt = "++INCLUDE W1", decision = "sent",
+                      category = "dialect-rule", ruleId = "copy-include", check = new { @fixed = 1, places = 1, passed = true },
+                      outcome = "Saved.", saved = true },
+                new { label = "XTRACE", prompt = "XTRACE W1.", decision = "skipped" },
+            },
+        });
+        TeachJournal("not-matching", new { schemaVersion = 1, activityKind = "teach-parser", name = "other", startedAt = T0, groups = Array.Empty<object>() });
+
+        var reader = Reader();
+        var summary = Assert.Single(await reader.ListRunsAsync());
+        Assert.Equal("teach-parser", summary.ActivityKind);
+        Assert.Equal("teach:teach-1", summary.ActivityId);
+        Assert.Equal(1, summary.Calls);
+        var teach = (await reader.GetRunAsync(summary.RunId))!.Teach!;
+        Assert.Equal("m1", teach.Endpoint!.Model);
+        Assert.Equal(new[] { "sent", "skipped" }, teach.Groups.Select(g => g.Decision));
+        Assert.Equal("++INCLUDE W1", teach.Groups[0].Prompt);
+        Assert.True(teach.Groups[0].Check!.Passed);
+        Assert.Equal(1, teach.After!.Places);
+        Assert.Null(await reader.GetRunAsync(summary.RunId, attemptId: "x"));
+    }
+
+    [Fact]
+    public async Task ATeachRunWithNoRecentUpdateIsShownAsInterrupted()
+    {
+        TeachJournal("teach-old", new
+        {
+            schemaVersion = 1, activityKind = "teach-parser", name = "teach-old", status = "running",
+            startedAt = T0, updatedAt = T0, groups = Array.Empty<object>(),
+        });
+
+        var summary = Assert.Single(await Reader().ListRunsAsync());
+
+        Assert.Equal("interrupted", summary.Status);
+    }
+
     [Fact]
     public async Task NativeLogTailIsBoundedOriginalTextAndRejectsMissingChangedAndLinkedFiles()
     {

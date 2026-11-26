@@ -52,6 +52,17 @@ For each group of places with the same problem and word:
    *effects unknown*, and programs that use it stay Partial in the dependency evidence.
 6. You choose whether to save it (`y`; the default is no).
 
+## See a run in the portal
+
+Each `run` is recorded in `output/teach-parser/<run>/teach.json` and shows up in the
+portal's **🔁 AI Loop** tab as **Teach parser**. For each group you see the problem and
+its first place, the exact text that was sent (or would have been, if you skipped it),
+what your AI said, the proposed rule, the check over the whole estate and what you chose.
+The header shows the endpoint and model, and how many places were unread before and after.
+The record is updated after every step, so you can follow a run while it is going. It
+holds the same text the terminal showed and stays on your machine under `output/`, like
+every other scan result. A record that cannot be written never stops the run.
+
 ## Rule kinds
 
 | Kind | Example | What Starforge does |

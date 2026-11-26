@@ -30,9 +30,11 @@ public sealed class TeachParser(TextReader input, TextWriter output)
         ["exec-without-end-exec"] = "an EXEC block without END-EXEC",
         ["malformed-copy-statement"] = "a COPY statement Starforge could not read",
         ["taught-statement-boundary"] = "a taught statement whose end Starforge could not find",
+        ["expected-statement"] = "Starforge expected a statement here",
+        ["missing-period"] = "a period Starforge expected is missing",
     };
 
-    public static string Meaning(string code) => CodeMeaning.GetValueOrDefault(code, code);
+    public static string Meaning(string code) => CodeMeaning.GetValueOrDefault(code, code.Replace('-', ' '));
 
     public int Report(TeachScan scan, string rulesPath)
     {
@@ -47,7 +49,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
     }
 
     public async Task<int> RunAsync(IReadOnlyList<string> roots, string rulesPath, DialectRules rules, Func<TeachAiEndpoint> endpoint,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? journalRoot = null)
     {
         var scan = TeachScan.Run(roots, rules);
         WriteSummary(scan, rulesPath);
@@ -67,9 +69,12 @@ public sealed class TeachParser(TextReader input, TextWriter output)
             return 1;
         }
 
+        var journal = journalRoot is null ? null : TeachJournal.Start(journalRoot, roots, rulesPath, scan, output);
+        journal?.Endpoint(ai);
         IChatClient? client = null;
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var saved = new List<string>();
+        var status = "completed";
         try
         {
             while (scan.Groups.FirstOrDefault(g => !visited.Contains(g.Key)) is { } group)
@@ -96,16 +101,22 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                 output.WriteLine();
                 output.WriteLine(Indent(prompt));
                 output.WriteLine();
+                journal?.Group(group, Label(group), Meaning(group.Code), missing.Count, prompt);
                 var send = Ask("   Send it? [y]es / [s]kip / [q]uit (default skip): ");
                 if (send == "q")
                 {
+                    journal?.Decision("quit");
+                    status = "stopped";
                     break;
                 }
 
                 if (send != "y")
                 {
+                    journal?.Decision("skipped");
                     continue;
                 }
+
+                journal?.Decision("sent");
 
                 client ??= ai.CreateClient();
                 TeachAnswer answer;
@@ -115,18 +126,32 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                         [new ChatMessage(ChatRole.System, SystemPrompt), new ChatMessage(ChatRole.User, prompt)],
                         new ChatOptions { ModelId = ai.Model },
                         cancellationToken);
-                    answer = ParseAnswer(response.Text);
+                    try
+                    {
+                        answer = ParseAnswer(response.Text);
+                    }
+                    catch (InvalidDataException)
+                    {
+                        journal?.Answer(new TeachAnswer("(unreadable)", string.Empty, null, null), response.Text);
+                        throw;
+                    }
+
+                    journal?.Answer(answer, response.Text);
                 }
                 catch (Exception ex) when (ex is InvalidDataException or HttpRequestException or InvalidOperationException or TaskCanceledException)
                 {
                     output.WriteLine($"   The AI answer could not be used ({ex.Message}). Nothing saved.");
+                    journal?.AnswerFailed(ex.Message);
+                    journal?.Outcome("The AI answer could not be used. Nothing saved.");
                     continue;
                 }
 
                 output.WriteLine($"   Your AI says: {answer.Category}. {answer.Explanation}");
                 if (Candidate(group, answer, scan.Rules, names) is not { } rule)
                 {
-                    output.WriteLine(NoRuleAdvice(answer, missing));
+                    var advice = NoRuleAdvice(answer, missing);
+                    output.WriteLine(advice);
+                    journal?.Outcome(advice);
                     continue;
                 }
 
@@ -138,16 +163,20 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                 catch (InvalidDataException ex)
                 {
                     output.WriteLine($"   That rule is not allowed ({ex.Message}). Nothing saved.");
+                    journal?.Outcome($"That rule is not allowed ({ex.Message}). Nothing saved.");
                     continue;
                 }
 
                 output.WriteLine($"   Proposed rule: {Describe(rule)}");
+                journal?.Rule(rule, Describe(rule));
                 output.WriteLine("   Checking it by reading the whole estate again…");
                 var check = scan.Verify(group, candidate);
                 WriteVerification(check, group);
+                journal?.Verified(check, group.Places);
                 if (!check.Passed)
                 {
                     output.WriteLine("   Not saved: a rule must fix every place in this group and change nothing else.");
+                    journal?.Outcome("Not saved: a rule must fix every place in this group and change nothing else.");
                     continue;
                 }
 
@@ -158,28 +187,40 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                     {
                         rule = rule with { Effects = StatementEffects.None };
                         candidate = scan.Rules.With(rule);
+                        journal?.Effects("You said it changes no data and does not decide what runs next.");
                     }
                     else
                     {
                         output.WriteLine("   Kept as effects unknown: programs that use it stay Partial in the evidence.");
+                        journal?.Effects("Effects unknown: programs that use it stay Partial in the evidence.");
                     }
                 }
 
                 if (Ask($"   Save rule '{rule.Id}' to {rulesPath}? [y/N]: ") != "y")
                 {
+                    journal?.Outcome("You chose not to save it.");
                     continue;
                 }
 
                 Save(rulesPath, candidate);
                 saved.Add(rule.Id);
+                journal?.Outcome($"Saved to {rulesPath}.", saved: true);
                 output.WriteLine($"   Saved. Reading the estate again with {candidate.Rules.Count} rule(s)…");
                 scan = TeachScan.Run(roots, candidate);
             }
+        }
+        catch (Exception ex)
+        {
+            journal?.Finish("failed", null, ex.Message);
+            journal = null;
+            throw;
         }
         finally
         {
             client?.Dispose();
         }
+
+        journal?.Finish(status, scan);
 
         output.WriteLine();
         output.WriteLine(saved.Count == 0

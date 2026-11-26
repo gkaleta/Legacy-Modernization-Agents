@@ -41,7 +41,7 @@ public static class TeachParserCommand
                 return;
             }
 
-            Environment.ExitCode = await new TeachParser(Console.In, Console.Out).RunAsync(sources, rulesPath, rules, endpoint);
+            Environment.ExitCode = await new TeachParser(Console.In, Console.Out).RunAsync(sources, rulesPath, rules, endpoint, journalRoot: TeachJournal.Folder);
         }, runSource, rulesOption);
 
         var list = new Command("list", "Show the taught rules.");

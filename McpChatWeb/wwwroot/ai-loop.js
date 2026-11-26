@@ -296,6 +296,7 @@ class AiLoopView {
   runKey(run) { return run.runId + (run.attemptId ? '~' + run.attemptId : run.attemptIndex != null ? '~@' + run.attemptIndex : ''); }
   activityTime(run) { return Date.parse(run.lastEventAt || run.finishedAt || run.completedAt || run.startedAt) || 0; }
   kindLabel(run) { return run.activityKind === 'native-rekt' ? 'Native REKT'
+    : run.activityKind === 'teach-parser' ? 'Teach parser'
     : run.activityKind === 'migration-history' ? 'Migration history (no telemetry)' : 'Model attempt'; }
 
   saveSelection() {
@@ -371,7 +372,7 @@ class AiLoopView {
                 </option>`).join('')}
               ${this.runs.map(r => `
               <option value="${this.esc(this.runKey(r))}" ${this.runKey(r) === this.selected ? 'selected' : ''}>
-                [${this.kindLabel(r)}] ${this.esc(r.activityKind === 'native-rekt' ? r.activityId : 'Run ' + r.runId)}${r.attemptId ? ' · attempt ' + this.esc(r.attemptId.slice(0, 8)) : ''} · ${this.esc(r.status)}${r.telemetryAvailable === false ? ' · telemetry not recorded' : ''} · latest ${this.esc(this.when(r.lastEventAt || r.finishedAt || r.startedAt))}
+                [${this.kindLabel(r)}] ${this.esc(['native-rekt', 'teach-parser'].includes(r.activityKind) ? r.activityId : 'Run ' + r.runId)}${r.attemptId ? ' · attempt ' + this.esc(r.attemptId.slice(0, 8)) : ''} · ${this.esc(r.status)}${r.telemetryAvailable === false ? ' · telemetry not recorded' : ''} · latest ${this.esc(this.when(r.lastEventAt || r.finishedAt || r.startedAt))}
               </option>`).join('')}
             </select>
             <button class="emc-btn" data-act="refresh">↻</button>
@@ -423,6 +424,7 @@ class AiLoopView {
 
   renderDetail(d) {
     if (d.summary.activityKind === 'native-rekt') return this.renderNative(d);
+    if (d.summary.activityKind === 'teach-parser') return this.renderTeach(d);
     const s = d.summary;
     const suppliedTimes = [...d.events, ...d.contextHandoffs].map(e => e.ts).filter(t => t && !isNaN(new Date(t)));
     const lastEventAt = s.lastEventAt === undefined
@@ -564,6 +566,85 @@ class AiLoopView {
       <p class="emc-dim">References only; evidence files are not opened by this viewer.</p>
       ${(d.logs || []).map(log => `<div><code>${this.esc(log.path)}</code> · ${this.esc(log.kind)} · ${log.available ? 'available' : 'not available'}</div>`).join('')}
       </details>
+      </section>`;
+  }
+
+  // One teach-parser session: what Starforge could not read, what was sent, what the AI said, the check and the choice.
+  teachOutcome(g) {
+    if (g.saved) return ['saved', 'Rule saved'];
+    if (g.decision === 'quit') return ['stopped', 'Stopped here'];
+    if (g.decision === 'skipped') return ['skipped', 'Skipped · nothing sent'];
+    if (g.decision === 'asked') return ['waiting', 'Waiting for your answer'];
+    if (g.answerError) return ['failed', 'AI answer not usable'];
+    if (g.check && g.check.passed === false) return ['failed', 'Check failed · not saved'];
+    if (!g.ruleId && g.category) return ['info', 'No rule · ' + g.category];
+    return ['info', g.outcome ? 'Not saved' : 'In progress'];
+  }
+
+  teachCheck(c) {
+    if (!c) return '';
+    const lines = [`Fixes ${this.esc(c.fixed ?? '?')} of ${this.esc(c.places ?? '?')} place(s).`];
+    if (c.excluded) lines.push(`Treats ${this.esc(c.excluded)} file(s) as not programs.`);
+    if (c.remaining) lines.push(`Still not read: ${this.esc(c.remaining)}${c.firstRemaining ? ' · first: ' + this.esc(c.firstRemaining) : ''}.`);
+    if (c.newProblems) lines.push(`New problems: ${this.esc(c.newProblems)}${c.firstNew ? ' · first: ' + this.esc(c.firstNew) : ''}.`);
+    if (c.changedElsewhere) lines.push(`Also changes how ${this.esc(c.changedElsewhere)} other place(s) are read${c.firstChanged ? ' · first: ' + this.esc(c.firstChanged) : ''}.`);
+    if (!c.remaining && !c.newProblems && !c.changedElsewhere) lines.push('Nothing else changed.');
+    return `<div class="ail-teach-check ${c.passed ? 'ail-teach-pass' : 'ail-teach-fail'}">
+      <strong>${c.passed ? '✓ Check passed' : '✕ Check failed'}</strong> · ${lines.join(' ')}</div>`;
+  }
+
+  renderTeach(d) {
+    const s = d.summary, t = d.teach || {}, groups = t.groups || [];
+    const before = t.before || {}, after = t.after || {};
+    const sent = groups.filter(g => g.decision === 'sent').length;
+    const ai = t.endpoint ? `${this.esc(t.endpoint.service || 'AI')} · model ${this.esc(t.endpoint.model || 'not recorded')}
+      ${t.endpoint.endpoint ? ` · <code>${this.esc(t.endpoint.endpoint)}</code>` : ''}` : 'not recorded';
+    const counts = (label, b, a) => b == null ? '' : `${this.kpi(a == null ? this.esc(b) : `${this.esc(b)} → ${this.esc(a)}`, label)}`;
+    const step = (label, body) => `<div class="ail-teach-step"><div class="ail-teach-label">${label}</div><div>${body}</div></div>`;
+    const card = (g, i) => {
+      const [kind, label] = this.teachOutcome(g);
+      const title = g.label === "'...'" ? "a literal ('...')" : g.label;
+      return `<article class="ail-teach-card">
+        <div class="ail-teach-head"><span class="ail-teach-num">${i + 1}</span>
+          <div class="ail-teach-title"><code>${this.esc(title)}</code><div class="emc-dim">${this.esc(g.meaning || g.code || '')}</div></div>
+          <span class="ail-teach-chip ail-teach-${kind}">${this.esc(label)}</span></div>
+        ${step('Problem', `${this.esc(g.places ?? '?')} place(s) in ${this.esc(g.programs ?? '?')} program(s)${g.firstFile
+          ? ` · first at <code>${this.esc(g.firstFile)}</code> line ${this.esc(g.firstLine ?? '?')}` : ''}
+          ${g.programsMissingCopybooks ? `<div class="emc-dim">${this.esc(g.programsMissingCopybooks)} of these program(s) miss copybooks; the problem may come from those.</div>` : ''}`)}
+        ${step(g.decision === 'sent' ? 'Sent to your AI' : 'Not sent', `<details data-ail-detail="teach-prompt:${i}" data-ail-open="${g.decision === 'sent'}">
+          <summary>Exact text${g.decision === 'sent' ? ' that was sent' : ' it would have sent'}</summary>
+          <pre class="ail-teach-pre">${this.esc(g.prompt || 'not recorded')}</pre></details>`)}
+        ${g.decision === 'sent' ? step('Your AI said', `${g.category ? `<span class="ail-teach-chip ail-teach-info">${this.esc(g.category)}</span> ${this.esc(g.explanation || '')}` : ''}
+          ${g.answerError ? `<div class="emc-warn">${this.esc(g.answerError)}</div>` : ''}
+          ${g.answer ? `<details data-ail-detail="teach-answer:${i}"><summary>Full answer</summary><pre class="ail-teach-pre">${this.esc(g.answer)}</pre></details>` : ''}`) : ''}
+        ${g.rule ? step('Proposed rule', `<code>${this.esc(g.ruleId)}</code> · ${this.esc(g.rule)}
+          ${g.ruleJson ? `<details data-ail-detail="teach-rule:${i}"><summary>As written to the rules file</summary><pre class="ail-teach-pre">${this.esc(g.ruleJson)}</pre></details>` : ''}`) : ''}
+        ${g.check ? step('Check', this.teachCheck(g.check)) : ''}
+        ${g.effects ? step('Effects', this.esc(g.effects)) : ''}
+        ${g.outcome ? step('Result', this.esc(g.outcome)) : ''}
+        </article>`;
+    };
+    return `<section class="ail-teach" aria-label="Teach the parser session">
+      <h3><span class="emc-badge">Teach parser</span> ${this.esc(t.name || s.activityId)}</h3>
+      <div class="ail-meta">Status: ${this.esc(this.statusLabel(s.status))} · started ${this.esc(this.when(s.startedAt))}
+        · finished ${this.esc(this.when(s.finishedAt))}<br>
+        Your AI endpoint: ${ai}<br>
+        Estate folder(s): ${(t.sources || []).map(x => `<code>${this.esc(x)}</code>`).join(', ') || 'not recorded'}
+        · rules file: <code>${this.esc(t.rulesFile || 'not recorded')}</code></div>
+      ${d.warning ? `<p class="emc-warn">${this.esc(d.warning)}</p>` : ''}
+      ${s.failureReason ? `<p class="emc-warn" role="alert">${this.esc(s.failureReason)}</p>` : ''}
+      <div class="emc-kpis">
+        ${counts('places not read', before.places, after.places)}
+        ${counts('problem groups', before.groups, after.groups)}
+        ${counts('files set aside as not programs', before.excluded, after.excluded)}
+        ${this.kpi(`${sent} of ${groups.length}`, 'groups sent to your AI')}
+        ${this.kpi((t.savedRules || []).length, 'rules saved')}
+      </div>
+      <p class="emc-dim">Each group shows the exact text that was (or would have been) sent. Names from your code were replaced by W1, W2, …;
+        comments and literal contents were removed before anything left this machine. A rule is only saved when it fixes every place
+        in its group and changes nothing else, and only after you said yes. This record stays on this machine in <code>${this.esc(t.manifestPath || '')}</code>.</p>
+      ${t.truncated ? '<p class="emc-warn">Only the first groups are shown; the full record is on disk.</p>' : ''}
+      ${groups.length ? groups.map(card).join('') : '<div class="mc-empty">No group has been looked at yet.</div>'}
       </section>`;
   }
 
@@ -714,7 +795,7 @@ class AiLoopView {
     return `<div class="emc-kpi${warn ? ' emc-kpi-warn' : ''}"><div class="emc-kpi-num">${this.esc(value)}</div><div class="emc-kpi-label">${this.esc(label)}</div></div>`;
   }
 
-  statusLabel(s) { return { completed: 'done', running: 'running', failed: 'failed', interrupted: 'interrupted', terminated: 'terminated', cancelled: 'cancelled', unknown: 'unknown', no_files: 'no files' }[s] || s; }
+  statusLabel(s) { return { completed: 'done', running: 'running', failed: 'failed', interrupted: 'interrupted', terminated: 'terminated', cancelled: 'cancelled', stopped: 'stopped by you', unknown: 'unknown', no_files: 'no files' }[s] || s; }
   dur(ms) {
     if (ms == null) return 'not recorded';
     if (ms < 1000) return `${ms} ms`;

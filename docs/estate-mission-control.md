@@ -5,7 +5,7 @@
 Two portal tabs help you decide what to convert and then check how a conversion went:
 
 - **Estate Mission Control** splits the estate into slices that can be converted on their own and orders them into waves. You can convert a slice directly from the tab. No model is involved: the graph is built from the source alone.
-- **AI Loop** shows recorded native REKT scans, model attempts and managed launches. Model attempts include calls, retries, fallbacks, stages and quality gates; native scans have their own program results and original log references.
+- **AI Loop** shows recorded native REKT scans, teach-parser sessions, model attempts and managed launches. Model attempts include calls, retries, fallbacks, stages and quality gates; native scans have their own program results and original log references.
 
 ## Estate graph
 
@@ -103,7 +103,7 @@ Each program gets a business function from `DomainRules`: the first rule whose `
 ### Unified activity catalogue
 
 AI Loop follows **latest recorded activity** by default, across **Native REKT** scans,
-**Model attempts**, persisted **Migration history (no telemetry)** and **Managed launches**.
+**Teach parser** sessions (see `docs/teach-the-parser.md`), **Model attempts**, persisted **Migration history (no telemetry)** and **Managed launches**.
 Latest means a recorded event/finish/start, never the file modification time or polling time.
 An explicit selection pins history, visibly labelled **Pinned selection**; **Follow newest**
 resumes discovery. Old, unversioned browser selections no longer silently pin an old run.

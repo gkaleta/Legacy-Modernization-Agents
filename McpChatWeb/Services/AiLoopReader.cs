@@ -87,7 +87,8 @@ public sealed record AiLoopRunDetail(
     IReadOnlyList<AiLoopRunSummary>? RelatedAttempts = null,
     IReadOnlyList<AiLoopLogReference>? Logs = null,
     AiLoopTelemetry? Telemetry = null,
-    NativeScanProgress? Native = null);
+    NativeScanProgress? Native = null,
+    TeachSession? Teach = null);
 
 public sealed class AiLoopOptions
 {
@@ -178,6 +179,7 @@ public sealed partial class AiLoopReader
         foreach (var historical in await DatabaseRunsAsync(ct))
             if (!result.Any(r => r.RunId == historical.RunId)) result.Add(historical);
         result.AddRange(NativeActivities().Select(d => d.Summary));
+        result.AddRange(TeachActivities().Select(d => d.Summary));
         return result.OrderByDescending(r => r.LastEventAt ?? r.FinishedAt ?? r.StartedAt).ThenByDescending(r => r.RunId)
             .Skip(Math.Max(0, offset)).Take(Math.Clamp(limit ?? options.MaxRuns, 1, 201)).ToList();
     }
@@ -222,6 +224,9 @@ public sealed partial class AiLoopReader
         if (runId.StartsWith("native-", StringComparison.Ordinal))
             return attemptId is null && attemptIndex is null
                 ? NativeActivities().FirstOrDefault(d => d.Summary.RunId == runId) : null;
+        if (runId.StartsWith("teach-", StringComparison.Ordinal))
+            return attemptId is null && attemptIndex is null
+                ? TeachActivities().FirstOrDefault(d => d.Summary.RunId == runId) : null;
         var path = Path.Join(RepoRoot, MetricsFolder, runId + ".jsonl");
         if (!File.Exists(path))
         {

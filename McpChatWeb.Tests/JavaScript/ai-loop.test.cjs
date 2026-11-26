@@ -553,3 +553,27 @@ test('the native activity feed opens by default only while the scan is running',
   assert.ok(f.view.renderNative(d('running')).indexOf('ail-native-log') < f.view.renderNative(d('running')).indexOf('Program results'),
     'the live feed sits above the program table');
 });
+
+test('teach-parser sessions show the exact text sent, the AI answer, the check and the choice, escaped', () => {
+  const f = fixture(() => Promise.resolve(response({})));
+  const d = { ...detail('teach-x'), summary: { runId: 'teach-x', activityKind: 'teach-parser', activityId: 'teach:t1', status: 'completed' },
+    teach: { name: 't1', manifestPath: 'output/teach-parser/t1/teach.json', sources: ['est'], rulesFile: 'rules.json',
+      endpoint: { service: 'AzureOpenAI', model: 'm1' }, before: { places: 2, groups: 2 }, after: { places: 1, groups: 1 }, savedRules: ['copy-include'],
+      groups: [
+        { label: '++INCLUDE', meaning: 'unknown statement', places: 1, programs: 1, prompt: 'MOVE <W1> TO W2', decision: 'sent',
+          category: 'dialect-rule', explanation: 'Panvalet include.', ruleId: 'copy-include', rule: 'copy alias',
+          check: { fixed: 1, places: 1, passed: true }, outcome: 'Saved.', saved: true },
+        { label: 'XTRACE', prompt: 'XTRACE W1.', decision: 'skipped' }
+      ] } };
+  const html = f.view.renderDetail(d);
+  assert.match(html, /Teach parser/);
+  assert.match(html, /MOVE &lt;W1&gt; TO W2/);
+  assert.doesNotMatch(html, /<W1>/);
+  assert.match(html, /Your AI said/);
+  assert.match(html, /✓ Check passed.*Fixes 1 of 1 place\(s\)\..*Nothing else changed\./s);
+  assert.match(html, /Rule saved/);
+  assert.match(html, /Skipped · nothing sent/);
+  assert.match(html, /2 → 1/);
+  assert.match(html, /1 of 2/);
+  assert.equal(f.view.kindLabel(d.summary), 'Teach parser');
+});
