@@ -13,10 +13,10 @@ public sealed record TeachCheck(int? Fixed, int? Places, int? Excluded, int? Rem
 public sealed record TeachGroupRecord(string Label, string? Code, string? Meaning, int? Places, int? Programs, string? FirstFile,
     int? FirstLine, int? ProgramsMissingCopybooks, string? Prompt, string Decision, string? Category, string? Explanation,
     string? Answer, string? AnswerError, string? RuleId, string? Rule, string? RuleJson, TeachCheck? Check, string? Effects,
-    string? Outcome, bool Saved);
+    string? Outcome, bool Saved, string? Note = null);
 public sealed record TeachSession(string ManifestPath, string Name, IReadOnlyList<string> Sources, string? RulesFile,
     TeachEndpoint? Endpoint, TeachCounts? Before, TeachCounts? After, IReadOnlyList<TeachGroupRecord> Groups,
-    IReadOnlyList<string> SavedRules, bool Truncated);
+    IReadOnlyList<string> SavedRules, bool Truncated, string Mode = "review");
 
 // Reads teach-parser journals (output/teach-parser/<id>/teach.json). Read-only, bounded, regular files only.
 public sealed partial class AiLoopReader
@@ -136,7 +136,7 @@ public sealed partial class AiLoopReader
                         Number(check, "newProblems"), Number(check, "changedElsewhere"), Flag(check, "passed"),
                         Text(check, "firstRemaining", 1000), Text(check, "firstNew", 1000), Text(check, "firstChanged", 1000))
                     : null,
-                Text(g, "effects", 500), Text(g, "outcome", 2000), Flag(g, "saved") == true));
+                Text(g, "effects", 500), Text(g, "outcome", 2000), Flag(g, "saved") == true, Text(g, "note", 100)));
         }
 
         var endpoint = Child(doc, "endpoint");
@@ -154,7 +154,8 @@ public sealed partial class AiLoopReader
             LastEventAt: last, ActivityKind: "teach-parser", ActivityId: "teach:" + name);
         var session = new TeachSession(relative + "/teach.json", name!, Strings(doc, "sources"), Text(doc, "rulesFile", 1000),
             endpoint.ValueKind == JsonValueKind.Object ? new(Text(endpoint, "service", 200), Text(endpoint, "endpoint", 1000), Text(endpoint, "model", 200)) : null,
-            Counts(Child(doc, "before")), Counts(Child(doc, "after")), records, saved, groups.GetArrayLength() > records.Count);
+            Counts(Child(doc, "before")), Counts(Child(doc, "after")), records, saved, groups.GetArrayLength() > records.Count,
+            Text(doc, "mode", 20) == "automatic" ? "automatic" : "review");
         return new(summary, relative, [new(1, 1, "Teach the parser", start.Value, summary.DurationMs)], [], [], [], null, [], [],
             Logs: [new(relative + "/teach.json", "teach-parser record", null, true)], Teach: session);
     }

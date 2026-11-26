@@ -622,11 +622,15 @@ class AiLoopView {
         ${g.check ? step('Check', this.teachCheck(g.check)) : ''}
         ${g.effects ? step('Effects', this.esc(g.effects)) : ''}
         ${g.outcome ? step('Result', this.esc(g.outcome)) : ''}
+        ${g.note ? step('Note', `A note for the Starforge team is ready: <code>${this.esc(g.note)}</code>. Nothing has been sent;
+          share it only if you want to: <code>./doctor.sh teach-parser share ${this.esc(g.note)}</code>`) : ''}
         </article>`;
     };
     return `<section class="ail-teach" aria-label="Teach the parser session">
       <h3><span class="emc-badge">Teach parser</span> ${this.esc(t.name || s.activityId)}</h3>
-      <div class="ail-meta">Status: ${this.esc(this.statusLabel(s.status))} · started ${this.esc(this.when(s.startedAt))}
+      <div class="ail-meta">Status: ${this.esc(this.statusLabel(s.status))} · ${t.mode === 'automatic'
+        ? 'Automatic: you agreed once for this estate; rules were saved only when their check passed'
+        : 'Reviewed by you, group by group'} · started ${this.esc(this.when(s.startedAt))}
         · finished ${this.esc(this.when(s.finishedAt))}<br>
         Your AI endpoint: ${ai}<br>
         Estate folder(s): ${(t.sources || []).map(x => `<code>${this.esc(x)}</code>`).join(', ') || 'not recorded'}

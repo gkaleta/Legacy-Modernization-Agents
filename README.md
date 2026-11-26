@@ -132,7 +132,7 @@ No settings are needed to understand an estate. Each estate's CICS definitions (
 | `./doctor.sh rekt-status` | Container, graph and export status |
 | `PARSER_ENGINE=starforge` / `both` | Parse with Starforge, the local .NET parser (no Docker for the parse), or run both parsers and compare them. Default `rekt`. See [Parser engine](docs/doctor-commands.md#parser-engine-parser_engine) |
 | `REKT_VERBOSE=true` | Also stream the parser's own output (normally kept in `output/rekt/**/*.parse.log`) |
-| `./doctor.sh teach-parser` | Teach Starforge your site's own COBOL words with your own AI endpoint; asks before sending anything. See [Teach the parser](docs/teach-the-parser.md) |
+| `./doctor.sh teach-parser` | Teach Starforge your site's own COBOL words with your own AI endpoint; asks once per estate before sending, then saves only rules that pass their check (`--review` to decide each step). See [Teach the parser](docs/teach-the-parser.md) |
 | `REKT_NO_BMS_MAPS=true` | Do not generate symbolic map copybooks from BMS mapsets |
 
 Unchanged programs are skipped as `(cached)`, so a rerun after a small change takes minutes. Add any missing copybooks to `source/` and run `rekt-full` again before converting. See [Parse first: rekt-full](docs/doctor-commands.md#parse-first-rekt-full).

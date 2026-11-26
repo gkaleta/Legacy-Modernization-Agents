@@ -31,7 +31,7 @@ public sealed class TeachJournal
     public string FilePath { get; }
 
     public static TeachJournal? Start(string root, IReadOnlyList<string> sources, string rulesPath, TeachScan before,
-        TextWriter? warnings = null)
+        bool automatic = false, TextWriter? warnings = null)
     {
         var now = DateTime.UtcNow;
         var name = $"teach-{now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}";
@@ -45,6 +45,7 @@ public sealed class TeachJournal
                 ["activityKind"] = ActivityKind,
                 ["name"] = name,
                 ["status"] = "running",
+                ["mode"] = automatic ? "automatic" : "review",
                 ["startedAt"] = Stamp(now),
                 ["updatedAt"] = Stamp(now),
                 ["sources"] = new JsonArray(sources.Select(s => (JsonNode)Path.GetFileName(s.TrimEnd('/', '\\'))).ToArray()),
@@ -145,6 +146,8 @@ public sealed class TeachJournal
     }
 
     public void Effects(string effects) => Set("effects", effects);
+
+    public void Note(string id) => Set("note", id);
 
     public void Outcome(string text, bool saved = false)
     {

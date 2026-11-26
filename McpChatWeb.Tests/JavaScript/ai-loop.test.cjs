@@ -557,13 +557,14 @@ test('the native activity feed opens by default only while the scan is running',
 test('teach-parser sessions show the exact text sent, the AI answer, the check and the choice, escaped', () => {
   const f = fixture(() => Promise.resolve(response({})));
   const d = { ...detail('teach-x'), summary: { runId: 'teach-x', activityKind: 'teach-parser', activityId: 'teach:t1', status: 'completed' },
-    teach: { name: 't1', manifestPath: 'output/teach-parser/t1/teach.json', sources: ['est'], rulesFile: 'rules.json',
+    teach: { name: 't1', manifestPath: 'output/teach-parser/t1/teach.json', sources: ['est'], rulesFile: 'rules.json', mode: 'automatic',
       endpoint: { service: 'AzureOpenAI', model: 'm1' }, before: { places: 2, groups: 2 }, after: { places: 1, groups: 1 }, savedRules: ['copy-include'],
       groups: [
         { label: '++INCLUDE', meaning: 'unknown statement', places: 1, programs: 1, prompt: 'MOVE <W1> TO W2', decision: 'sent',
           category: 'dialect-rule', explanation: 'Panvalet include.', ruleId: 'copy-include', rule: 'copy alias',
           check: { fixed: 1, places: 1, passed: true }, outcome: 'Saved.', saved: true },
-        { label: 'XTRACE', prompt: 'XTRACE W1.', decision: 'skipped' }
+        { label: 'XTRACE', prompt: 'XTRACE W1.', decision: 'skipped' },
+        { label: '(no word)', prompt: 'W1.', decision: 'sent', category: 'parser-gap', note: 'gap-expected-statement' }
       ] } };
   const html = f.view.renderDetail(d);
   assert.match(html, /Teach parser/);
@@ -574,6 +575,8 @@ test('teach-parser sessions show the exact text sent, the AI answer, the check a
   assert.match(html, /Rule saved/);
   assert.match(html, /Skipped · nothing sent/);
   assert.match(html, /2 → 1/);
-  assert.match(html, /1 of 2/);
+  assert.match(html, /2 of 3/);
+  assert.match(html, /Automatic: you agreed once for this estate/);
+  assert.match(html, /teach-parser share gap-expected-statement/);
   assert.equal(f.view.kindLabel(d.summary), 'Teach parser');
 });

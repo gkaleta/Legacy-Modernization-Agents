@@ -11,9 +11,20 @@ public sealed record TeachAiEndpoint(string Service, string Endpoint, string Mod
 
 public sealed record TeachAnswer(string Category, string Explanation, string? RuleKind, string? End, string? Word = null);
 
+// Automatic runs send each group without asking, once the person has agreed for these estate folders and this endpoint
+// (Consent), and save a rule only when its check passes. CanAsk is false without a terminal.
+public sealed record TeachRunOptions(
+    bool Automatic = false,
+    TeachConsent? Consent = null,
+    bool Agree = false,
+    bool CanAsk = true,
+    string? JournalRoot = null,
+    TeachNotes? Notes = null,
+    string? SensitiveTermsPath = EstateNames.SensitiveTermsPath);
+
 // Teaches Starforge the site's own COBOL words. The AI only classifies a pseudonymised excerpt; the rule itself is
 // built from what Starforge found, checked by reading the whole estate again, and saved only when the person agrees.
-public sealed class TeachParser(TextReader input, TextWriter output)
+public sealed partial class TeachParser(TextReader input, TextWriter output)
 {
     public const string IssuesUrl = "https://github.com/Azure-Samples/Legacy-Modernization-Agents/issues/new";
 
@@ -49,8 +60,9 @@ public sealed class TeachParser(TextReader input, TextWriter output)
     }
 
     public async Task<int> RunAsync(IReadOnlyList<string> roots, string rulesPath, DialectRules rules, Func<TeachAiEndpoint> endpoint,
-        CancellationToken cancellationToken = default, string? journalRoot = null)
+        TeachRunOptions? options = null, CancellationToken cancellationToken = default)
     {
+        options ??= new TeachRunOptions();
         var scan = TeachScan.Run(roots, rules);
         WriteSummary(scan, rulesPath);
         if (scan.Groups.Count == 0)
@@ -69,8 +81,39 @@ public sealed class TeachParser(TextReader input, TextWriter output)
             return 1;
         }
 
-        var journal = journalRoot is null ? null : TeachJournal.Start(journalRoot, roots, rulesPath, scan, output);
+        var automatic = options.Automatic;
+        if (automatic && options.Consent?.Covers(roots, ai) != true)
+        {
+            switch (AskConsent(scan, ai, options))
+            {
+                case "y":
+                    options.Consent?.Give(roots, ai);
+                    break;
+                case "r":
+                    automatic = false;
+                    break;
+                case "none":
+                    return 2;
+                default:
+                    output.WriteLine("Nothing sent.");
+                    return 0;
+            }
+        }
+
+        var journal = options.JournalRoot is null ? null : TeachJournal.Start(options.JournalRoot, roots, rulesPath, scan, automatic, output);
         journal?.Endpoint(ai);
+        if (automatic)
+        {
+            output.WriteLine();
+            output.WriteLine($"Teaching automatically with {ai.Service} ({ai.Endpoint}, model {ai.Model}).");
+            output.WriteLine("A rule is saved only when it fixes every place in its group and changes nothing else.");
+            if (journal is not null)
+            {
+                output.WriteLine($"The exact text sent for each group is kept in {journal.FilePath} and shown in the portal's AI Loop tab.");
+            }
+        }
+
+        EstateNames? estateNames = null;
         IChatClient? client = null;
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var saved = new List<string>();
@@ -94,15 +137,25 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                     output.WriteLine($"   {missing.Count} of these program(s) miss copybooks; the problem may come from those.");
                 }
 
-                output.WriteLine();
-                output.WriteLine($"   This is exactly what would be sent to {ai.Service} ({ai.Endpoint}, model {ai.Model}).");
-                output.WriteLine("   Names from your code are replaced by W1, W2, …; comments and literal contents are removed.");
-                output.WriteLine("   It is still your code's structure; your endpoint's own data terms apply.");
-                output.WriteLine();
-                output.WriteLine(Indent(prompt));
-                output.WriteLine();
                 journal?.Group(group, Label(group), Meaning(group.Code), missing.Count, prompt);
-                var send = Ask("   Send it? [y]es / [s]kip / [q]uit (default skip): ");
+                string send;
+                if (automatic)
+                {
+                    output.WriteLine($"   Sending it to {ai.Service}…");
+                    send = "y";
+                }
+                else
+                {
+                    output.WriteLine();
+                    output.WriteLine($"   This is exactly what would be sent to {ai.Service} ({ai.Endpoint}, model {ai.Model}).");
+                    output.WriteLine("   Names from your code are replaced by W1, W2, …; comments and literal contents are removed.");
+                    output.WriteLine("   It is still your code's structure; your endpoint's own data terms apply.");
+                    output.WriteLine();
+                    output.WriteLine(Indent(prompt));
+                    output.WriteLine();
+                    send = Ask("   Send it? [y]es / [s]kip / [q]uit (default skip): ");
+                }
+
                 if (send == "q")
                 {
                     journal?.Decision("quit");
@@ -151,6 +204,12 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                 {
                     var advice = NoRuleAdvice(answer, missing);
                     output.WriteLine(advice);
+                    if (answer.Category == "parser-gap" && options.Notes is { } notes)
+                    {
+                        estateNames ??= EstateNames.From(roots, options.SensitiveTermsPath);
+                        advice += "\n" + WriteGapNote(notes, estateNames, group, answer, excerpt, journal);
+                    }
+
                     journal?.Outcome(advice);
                     continue;
                 }
@@ -180,7 +239,12 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                     continue;
                 }
 
-                if (rule.Kind == DialectRuleKind.Statement)
+                if (rule.Kind == DialectRuleKind.Statement && automatic)
+                {
+                    output.WriteLine("   Kept as effects unknown: programs that use it stay Partial in the evidence.");
+                    journal?.Effects("Effects unknown (automatic run): programs that use it stay Partial in the evidence.");
+                }
+                else if (rule.Kind == DialectRuleKind.Statement)
                 {
                     var effects = Ask($"   Can {rule.Word} change data or decide what runs next? Answer n only if you are sure it does neither. [n]o / [u]nsure (default unsure): ");
                     if (effects == "n")
@@ -196,7 +260,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
                     }
                 }
 
-                if (Ask($"   Save rule '{rule.Id}' to {rulesPath}? [y/N]: ") != "y")
+                if (!automatic && Ask($"   Save rule '{rule.Id}' to {rulesPath}? [y/N]: ") != "y")
                 {
                     journal?.Outcome("You chose not to save it.");
                     continue;
@@ -204,7 +268,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
 
                 Save(rulesPath, candidate);
                 saved.Add(rule.Id);
-                journal?.Outcome($"Saved to {rulesPath}.", saved: true);
+                journal?.Outcome(automatic ? $"Saved automatically to {rulesPath}; remove it with teach-parser remove {rule.Id}." : $"Saved to {rulesPath}.", saved: true);
                 output.WriteLine($"   Saved. Reading the estate again with {candidate.Rules.Count} rule(s)…");
                 scan = TeachScan.Run(roots, candidate);
             }
@@ -225,23 +289,38 @@ public sealed class TeachParser(TextReader input, TextWriter output)
         output.WriteLine();
         output.WriteLine(saved.Count == 0
             ? "No rules saved."
-            : $"Saved {saved.Count} rule(s): {string.Join(", ", saved)}. Share one with the Starforge team: ./doctor.sh teach-parser share <id>");
+            : $"Saved {saved.Count} rule(s): {string.Join(", ", saved)}. Remove one with ./doctor.sh teach-parser remove <id>.");
+        if (saved.Count > 0 || estateNames is not null)
+        {
+            output.WriteLine("To share a rule or note with the Starforge team (your choice; nothing is sent): ./doctor.sh teach-parser share <id>");
+        }
+
         WriteSummary(scan, rulesPath);
         return 0;
     }
 
-    public int List(DialectRules rules, string rulesPath)
+    public int List(DialectRules rules, string rulesPath, TeachNotes? notes = null)
     {
         if (rules.IsEmpty)
         {
             output.WriteLine($"No taught rules ({rulesPath}).");
-            return 0;
+        }
+        else
+        {
+            output.WriteLine($"{rules.Rules.Count} taught rule(s) in {rulesPath} (sha256 {rules.Sha256[..12]}):");
+            foreach (var r in rules.Rules)
+            {
+                output.WriteLine($"  {r.Id,-24} {Describe(r)}{(string.IsNullOrWhiteSpace(r.Reason) ? string.Empty : " — " + r.Reason)}");
+            }
         }
 
-        output.WriteLine($"{rules.Rules.Count} taught rule(s) in {rulesPath} (sha256 {rules.Sha256[..12]}):");
-        foreach (var r in rules.Rules)
+        if (notes?.Ids() is { Count: > 0 } ids)
         {
-            output.WriteLine($"  {r.Id,-24} {Describe(r)}{(string.IsNullOrWhiteSpace(r.Reason) ? string.Empty : " — " + r.Reason)}");
+            output.WriteLine($"Notes for the Starforge team in {notes.FolderPath} (nothing sent; share one with teach-parser share <id>):");
+            foreach (var id in ids)
+            {
+                output.WriteLine($"  {id,-24} {TeachNotes.Title(File.ReadAllText(notes.PathOf(id)))}");
+            }
         }
 
         return 0;
@@ -260,37 +339,165 @@ public sealed class TeachParser(TextReader input, TextWriter output)
         return 0;
     }
 
-    // Nothing is sent: the person opens the issue themselves with a generic rule and a made-up example.
-    public int Share(DialectRules rules, string id)
+    // Writes a note for the Starforge team and sends nothing. It holds a generic rule and a made-up example, or a parser-gap
+    // note written during a run; either way it is checked against the estate's names first. Posting it to GitHub is the
+    // person's choice: only with --github, after they read it and confirm.
+    public int Share(DialectRules rules, string id, TeachNotes notes, EstateNames names, bool github = false, bool canAsk = true,
+        Func<string, string, (int Exit, string Output)?>? post = null)
     {
-        if (rules.Rules.FirstOrDefault(r => r.Id == id) is not { } rule)
+        string note;
+        if (rules.Rules.FirstOrDefault(r => r.Id == id) is { } rule)
         {
-            output.WriteLine($"No rule '{id}'.");
+            if (rule.Kind == DialectRuleKind.NotProgram)
+            {
+                output.WriteLine($"Rule '{id}' only lists files from your estate, so it is never shared: nothing in it is generic,");
+                output.WriteLine("and the file names themselves belong to your estate.");
+                return 1;
+            }
+
+            var word = rule.Word!;
+            if (names.Contains(word))
+            {
+                var neutral = Neutral(word);
+                output.WriteLine($"{word} is also a name in your estate (or in {EstateNames.SensitiveTermsPath}), so the note uses {neutral} instead.");
+                output.WriteLine("Tell the Starforge team the real word only if it is not confidential.");
+                word = neutral;
+            }
+
+            var generic = rule with { Id = "shared-" + Slug(word), Word = word, Paths = null, Reason = null };
+            note = TeachNotes.RuleNote(generic, Example(generic));
+        }
+        else if (notes.Exists(id))
+        {
+            note = File.ReadAllText(notes.PathOf(id));
+        }
+        else
+        {
+            output.WriteLine($"No rule or note '{id}'. './doctor.sh teach-parser list' shows both.");
             return 1;
         }
 
-        if (rule.Kind == DialectRuleKind.NotProgram)
+        var hits = names.Hits(note);
+        if (hits.Count > 0)
         {
-            output.WriteLine($"Rule '{id}' names files in your estate, so there is nothing generic to share.");
+            output.WriteLine($"Not shared: the note contains {hits.Count} name(s) from your estate or {EstateNames.SensitiveTermsPath}:");
+            output.WriteLine("  " + string.Join(", ", hits.Take(10)) + (hits.Count > 10 ? ", …" : string.Empty));
+            output.WriteLine(notes.Exists(id) ? $"Edit {notes.PathOf(id)} to remove them, then share again." : "Nothing was written.");
             return 1;
         }
 
-        var generic = rule with { Id = "shared-" + Slug(rule.Word!), Paths = null, Reason = null };
-        output.WriteLine("Nothing has been sent. To share this rule with the Starforge team, open");
-        output.WriteLine($"{IssuesUrl} and paste the text below.");
-        output.WriteLine("It holds only the generic rule and a made-up example, no code from your estate.");
-        output.WriteLine();
-        output.WriteLine("Rule:");
-        output.WriteLine(DialectRules.Create([generic]).ToJson().TrimEnd());
-        output.WriteLine();
-        output.WriteLine("Made-up example:");
-        foreach (var line in Example(generic))
+        if (!names.EstateChecked)
         {
-            output.WriteLine(line);
+            output.WriteLine($"(No estate folder given, so only {EstateNames.SensitiveTermsPath} was checked.)");
         }
 
-        return 0;
+        var path = notes.Exists(id) ? notes.PathOf(id) : notes.Write(id, note);
+        output.WriteLine($"Wrote {path}. Nothing has been sent.");
+        if (!github)
+        {
+            output.WriteLine("Read it first. Sharing it is your choice: open");
+            output.WriteLine($"{IssuesUrl} and paste it, or post it with ./doctor.sh teach-parser share {id} --github");
+            return 0;
+        }
+
+        if (!canAsk)
+        {
+            output.WriteLine("Posting asks you to confirm first, so it needs a terminal. Nothing was posted.");
+            return 2;
+        }
+
+        output.WriteLine();
+        output.WriteLine(Indent(note.TrimEnd()));
+        output.WriteLine();
+        if (Ask($"Post this as a public issue on {TeachNotes.Repository}? [y/N]: ") != "y")
+        {
+            output.WriteLine("Not posted.");
+            return 0;
+        }
+
+        var result = (post ?? TeachNotes.PostToGitHub)(path, TeachNotes.Title(note));
+        if (result is not { } posted)
+        {
+            output.WriteLine($"The gh command is not installed. Open {IssuesUrl} and paste the note yourself.");
+            return 1;
+        }
+
+        output.WriteLine(posted.Exit == 0 ? $"Posted: {posted.Output}" : $"gh could not post it: {posted.Output}");
+        return posted.Exit == 0 ? 0 : 1;
     }
+
+    // Whether automatic sending may start: "y" agreed, "r" review each group instead, "none" no terminal to ask on.
+    private string AskConsent(TeachScan scan, TeachAiEndpoint ai, TeachRunOptions options)
+    {
+        if (options.Agree)
+        {
+            output.WriteLine($"Agreed with --agree: excerpts from these estate folder(s) are sent to {ai.Service} ({ai.Endpoint}) without asking per group.");
+            return "y";
+        }
+
+        if (!options.CanAsk)
+        {
+            output.WriteLine($"Teaching sends excerpts to {ai.Service} ({ai.Endpoint}) automatically once you agree for this estate. Nothing was sent.");
+            output.WriteLine("Run ./doctor.sh teach-parser in a terminal once to agree (or add --agree), or use --review to decide group by group.");
+            return "none";
+        }
+
+        var group = scan.Groups[0];
+        var missing = scan.Programs.Any(p => group.Programs.Contains(p.Program) && p.MissingCopybooks.Count > 0);
+        var prompt = UserPrompt(group, scan.Excerpt(group.Sites[0]), missing);
+        output.WriteLine();
+        output.WriteLine($"Teaching runs automatically. For each group Starforge sends one excerpt like the one below to {ai.Service}");
+        output.WriteLine($"({ai.Endpoint}, model {ai.Model}), checks the AI's rule by reading the whole estate again and saves it");
+        output.WriteLine("only when it fixes every place in the group and changes nothing else.");
+        output.WriteLine("Names from your code are replaced by W1, W2, …; comments and literal contents are removed.");
+        output.WriteLine("It is still your code's structure; your endpoint's own data terms apply.");
+        if (options.Consent is { } consent)
+        {
+            output.WriteLine($"Your answer is kept for these estate folder(s) and this endpoint in {consent.FilePath};");
+            output.WriteLine("./doctor.sh teach-parser forget withdraws it.");
+        }
+
+        output.WriteLine();
+        output.WriteLine("The first group:");
+        output.WriteLine(Indent(prompt));
+        output.WriteLine();
+        return Ask("Send automatically, now and in later runs? [y]es / [r]eview each group / [n]o (default no): ");
+    }
+
+    private string WriteGapNote(TeachNotes notes, EstateNames names, TeachGroup group, TeachAnswer answer, string excerpt, TeachJournal? journal)
+    {
+        var note = TeachNotes.GapNote(Meaning(group.Code), group.Code, names.Mask(answer.Explanation, out var a), names.Mask(excerpt, out var b));
+        if (names.Hits(note).Count > 0)
+        {
+            const string refused = "   No note written for the Starforge team: it would still name something from your estate.";
+            output.WriteLine(refused);
+            return refused;
+        }
+
+        var id = notes.NewGapId(group.Code);
+        string path;
+        try
+        {
+            path = notes.Write(id, note);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            var failed = $"   No note written for the Starforge team ({ex.Message}).";
+            output.WriteLine(failed);
+            return failed;
+        }
+
+        journal?.Note(id);
+        var text = $"   A note for the Starforge team is ready in {path}" + (a + b > 0 ? $" ({a + b} name(s) from your estate masked)" : string.Empty)
+            + $". Nothing has been sent; share it only if you want to: ./doctor.sh teach-parser share {id}";
+        output.WriteLine(text);
+        return text;
+    }
+
+    private static string Neutral(string word) => NeutralWord().Replace(word, "SITEWORD", 1);
+
+    [GeneratedRegex("[A-Za-z0-9][A-Za-z0-9-]*")]
+    private static partial Regex NeutralWord();
 
     public static void Save(string rulesPath, DialectRules rules)
     {
@@ -418,7 +625,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
             ? $"   Add the missing copybook(s) ({string.Join(", ", missing.SelectMany(p => p.MissingCopybooks).Distinct().Take(5))}) to the estate and scan again."
             : "   Add the missing copybook(s) to the estate and scan again.",
         "not-cobol" => "   Only files that fail at their very first line can be marked as not programs; this one reads partly as COBOL. Nothing saved.",
-        "parser-gap" => $"   This looks like standard COBOL that Starforge should read. Nothing saved; please tell us at {IssuesUrl} (describe the construct, do not paste your code).",
+        "parser-gap" => "   This looks like standard COBOL that Starforge should read. No rule is saved; the Starforge team can add it.",
         "dialect-rule" => "   The AI did not point at a word from this place that a rule can name. Nothing saved.",
         _ => "   The answer did not include a rule Starforge can use. Nothing saved.",
     };
@@ -491,6 +698,7 @@ public sealed class TeachParser(TextReader input, TextWriter output)
             "q" or "quit" => "q",
             "u" or "unsure" => "u",
             "s" or "skip" => "s",
+            "r" or "review" => "r",
             _ => string.Empty,
         };
     }

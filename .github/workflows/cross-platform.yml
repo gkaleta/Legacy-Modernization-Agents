@@ -71,7 +71,7 @@ jobs:
       - name: Teach the parser and Starforge evidence
         run: >-
           dotnet test CobolToQuarkusMigration.Tests -p:CopilotSkipCliDownload=true --nologo
-          --filter "FullyQualifiedName~CobolToQuarkusMigration.Tests.Cli.TeachParserTests|FullyQualifiedName~StarforgeEvidenceTests|FullyQualifiedName~RektPreprocessorTests"
+          --filter "FullyQualifiedName~CobolToQuarkusMigration.Tests.Cli.TeachParserTests|FullyQualifiedName~DoctorTeachParserTests|FullyQualifiedName~StarforgeEvidenceTests|FullyQualifiedName~RektPreprocessorTests"
 
       - name: Portal AI Loop
         run: |

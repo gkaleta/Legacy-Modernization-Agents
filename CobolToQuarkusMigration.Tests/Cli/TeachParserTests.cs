@@ -1,3 +1,4 @@
+using System.CommandLine.Parsing;
 using System.Text.Json.Nodes;
 using CobolToQuarkusMigration.Cli;
 using FluentAssertions;
@@ -60,17 +61,29 @@ public sealed class TeachParserTests : IDisposable
         public void Dispose() { }
     }
 
-    private async Task<(string Output, FakeClient Client, bool Created)> Run(string answers, string aiAnswer, string? journalRoot = null)
+    private string NotesDir => Path.Combine(_root, "notes");
+
+    private string ConsentPath => Path.Combine(_root, "Config", "consent.local.json");
+
+    private TeachRunOptions Review(string? journalRoot = null) => new(JournalRoot: journalRoot, Notes: new TeachNotes(NotesDir), SensitiveTermsPath: null);
+
+    private TeachRunOptions Automatic(bool canAsk = true, string? journalRoot = null)
+        => new(Automatic: true, Consent: new TeachConsent(ConsentPath), CanAsk: canAsk, JournalRoot: journalRoot, Notes: new TeachNotes(NotesDir), SensitiveTermsPath: null);
+
+    private async Task<(string Output, FakeClient Client, bool Created)> Run(string answers, string aiAnswer, string? journalRoot = null,
+        TeachRunOptions? options = null, int exitCode = 0)
     {
         var client = new FakeClient(aiAnswer);
         var created = false;
         var output = new StringWriter();
-        var exit = await new TeachParser(new StringReader(answers), output).RunAsync([_estate], _rulesPath, DialectRules.Empty,
+        var exit = await new TeachParser(new StringReader(answers), output).RunAsync([_estate], _rulesPath, TeachParserCommand.LoadRules(_rulesPath),
             () => new TeachAiEndpoint("AzureOpenAI", "https://example.invalid", "test-model", () => { created = true; return client; }),
-            journalRoot: journalRoot);
-        exit.Should().Be(0, output.ToString());
+            options ?? Review(journalRoot));
+        exit.Should().Be(exitCode, output.ToString());
         return (output.ToString(), client, created);
     }
+
+    private const string IncludeAnswer = """{"category":"dialect-rule","explanation":"Panvalet include.","rule":{"kind":"copyAlias"}}""";
 
     [Fact]
     public async Task ConsentedCopyAliasIsVerifiedAndSaved()
@@ -176,16 +189,170 @@ public sealed class TeachParserTests : IDisposable
         group["answer"].Should().BeNull();
     }
 
-    [Fact]
-    public void ShareHoldsOnlyTheGenericRuleAndAMadeUpExample()
+    private (int Exit, string Output, List<string> Posted) Share(DialectRules rules, string id, string answers = "", bool github = false,
+        string? sensitiveTerms = null)
     {
-        var rules = DialectRules.Create([new DialectRule("copy-include", DialectRuleKind.CopyAlias, "++INCLUDE", Reason: "seen in ORDERS")]);
+        var posted = new List<string>();
         var output = new StringWriter();
+        var exit = new TeachParser(new StringReader(answers), output).Share(rules, id, new TeachNotes(NotesDir), EstateNames.From([_estate], sensitiveTerms),
+            github, post: (path, title) => { posted.Add(title + "\n" + File.ReadAllText(path)); return (0, "https://example.invalid/issues/1"); });
+        return (exit, output.ToString(), posted);
+    }
 
-        new TeachParser(new StringReader(string.Empty), output).Share(rules, "copy-include").Should().Be(0);
+    [Fact]
+    public void ShareWritesANoteWithOnlyTheGenericRuleAndAMadeUpExampleAndSendsNothing()
+    {
+        IncludeProgram();
+        var rules = DialectRules.Create([new DialectRule("copy-include", DialectRuleKind.CopyAlias, "++INCLUDE", Reason: "seen in ORDERS")]);
 
-        output.ToString().Should().Contain("Nothing has been sent").And.Contain("\"word\": \"++INCLUDE\"").And.Contain("++INCLUDE EXAMPLEC")
-            .And.NotContain("ORDERS");
+        var (exit, output, posted) = Share(rules, "copy-include");
+
+        exit.Should().Be(0, output);
+        posted.Should().BeEmpty();
+        output.Should().Contain("Nothing has been sent");
+        var note = File.ReadAllText(Path.Combine(NotesDir, "copy-include.md"));
+        note.Should().Contain("\"word\": \"++INCLUDE\"").And.Contain("++INCLUDE EXAMPLEC").And.NotContainAny("ORDERS", "CUSTREC", "seen in");
+    }
+
+    [Fact]
+    public void ARuleWordThatIsAlsoAnEstateNameIsReplacedInTheNote()
+    {
+        IncludeProgram();
+        var rules = DialectRules.Create([new DialectRule("stmt-cust-rec", DialectRuleKind.Statement, "CUST-REC", DialectRule.PeriodEnd)]);
+
+        var (exit, output, _) = Share(rules, "stmt-cust-rec");
+
+        exit.Should().Be(0, output);
+        output.Should().Contain("CUST-REC is also a name in your estate");
+        File.ReadAllText(Path.Combine(NotesDir, "stmt-cust-rec.md")).Should().Contain("SITEWORD EX-FIELD.").And.NotContain("CUST-REC");
+    }
+
+    [Fact]
+    public void ANoteWithASensitiveTermIsNotShared()
+    {
+        IncludeProgram();
+        var terms = Path.Combine(_root, "terms.txt");
+        File.WriteAllText(terms, "# site terms\nEXAMPLEC\n");
+        var rules = DialectRules.Create([new DialectRule("copy-include", DialectRuleKind.CopyAlias, "++INCLUDE")]);
+
+        var (exit, output, _) = Share(rules, "copy-include", sensitiveTerms: terms);
+
+        exit.Should().Be(1);
+        output.Should().Contain("Not shared").And.Contain("EXAMPLEC");
+        Directory.Exists(NotesDir).Should().BeFalse();
+    }
+
+    [Fact]
+    public void NotProgramRulesAreNeverShared()
+    {
+        var rules = DialectRules.Create([new DialectRule("not-programs", DialectRuleKind.NotProgram, Paths: ["est/cobol/TXDEFS.cbl"])]);
+
+        var (exit, output, _) = Share(rules, "not-programs");
+
+        exit.Should().Be(1);
+        output.Should().Contain("never shared");
+        Directory.Exists(NotesDir).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("n\n", false)]
+    [InlineData("y\n", true)]
+    public void PostingToGitHubHappensOnlyAfterTheNoteIsShownAndConfirmed(string answer, bool posts)
+    {
+        var rules = DialectRules.Create([new DialectRule("copy-include", DialectRuleKind.CopyAlias, "++INCLUDE")]);
+
+        var (exit, output, posted) = Share(rules, "copy-include", answer, github: true);
+
+        exit.Should().Be(0, output);
+        output.Should().Contain("│ ## Made-up example");
+        posted.Should().HaveCount(posts ? 1 : 0);
+        if (posts)
+        {
+            posted[0].Should().StartWith("Starforge dialect: include word ++INCLUDE\n# Starforge dialect");
+        }
+    }
+
+    [Theory]
+    [InlineData("report")]
+    [InlineData("run")]
+    [InlineData("share", "copy-include")]
+    public void AMissingEstateFolderIsRefusedInsteadOfReadAsEmpty(params string[] command)
+    {
+        var missing = Path.Combine(_root, "typo");
+
+        var result = new Parser(TeachParserCommand.Build(() => throw new InvalidOperationException("no AI call expected")))
+            .Parse([.. command, "--source", missing, "--rules", _rulesPath]);
+
+        result.Errors.Select(e => e.Message).Should().ContainSingle().Which.Should().Be($"No folder '{missing}'.");
+    }
+
+    [Fact]
+    public async Task AnAutomaticRunAsksOnceThenSendsChecksAndSavesWithoutFurtherQuestions()
+    {
+        IncludeProgram();
+
+        var (first, firstClient, _) = await Run("n\n", IncludeAnswer, options: Automatic());
+        first.Should().Contain("Send automatically, now and in later runs?").And.Contain("Nothing sent.");
+        firstClient.Prompts.Should().BeEmpty();
+        File.Exists(ConsentPath).Should().BeFalse();
+
+        var journalRoot = Path.Combine(_root, "journal");
+        var (second, secondClient, _) = await Run("y\n", IncludeAnswer, options: Automatic(journalRoot: journalRoot));
+        secondClient.Prompts.Should().ContainSingle();
+        second.Should().NotContain("Save rule").And.Contain("It read every place in every program.");
+        TeachParserCommand.LoadRules(_rulesPath).Rules.Should().ContainSingle().Which.Id.Should().Be("copy-include");
+        Journal(journalRoot)["mode"]!.GetValue<string>().Should().Be("automatic");
+
+        TeachParser.Save(_rulesPath, DialectRules.Empty);
+        var (third, thirdClient, _) = await Run(string.Empty, IncludeAnswer, options: Automatic(canAsk: false));
+        third.Should().NotContain("Send automatically");
+        thirdClient.Prompts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task WithoutAgreementAndWithoutATerminalNothingIsSent()
+    {
+        IncludeProgram();
+
+        var (output, _, created) = await Run(string.Empty, IncludeAnswer, options: Automatic(canAsk: false), exitCode: 2);
+
+        created.Should().BeFalse();
+        output.Should().Contain("Nothing was sent").And.Contain("--agree");
+        File.Exists(_rulesPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AnAutomaticRunSavesStatementsAsEffectsUnknownAndNeverSavesARuleThatFailsItsCheck()
+    {
+        Write("cobol/LOG.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. LOG."), A("DATA DIVISION."), A("WORKING-STORAGE SECTION."),
+            A("01  WS-A PIC X."), A("PROCEDURE DIVISION."), B("SITELOG WS-A."), B("GOBACK."));
+        Write("cobol/TRC.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. TRC."), A("DATA DIVISION."), A("WORKING-STORAGE SECTION."),
+            A("01  WS-A PIC X."), A("PROCEDURE DIVISION."), B("XTRACE WS-A MOVE 'B' TO WS-A."), B("GOBACK."));
+        new TeachConsent(ConsentPath).Give([_estate], new TeachAiEndpoint("AzureOpenAI", "https://example.invalid", "other-model", () => null!));
+
+        var (output, _, _) = await Run(string.Empty, """{"category":"dialect-rule","explanation":"Site statement.","rule":{"kind":"statement","end":"period"}}""",
+            options: Automatic(canAsk: false));
+
+        output.Should().Contain("Kept as effects unknown").And.Contain("Not saved");
+        TeachParserCommand.LoadRules(_rulesPath).Rules.Should().ContainSingle()
+            .Which.Should().Match<DialectRule>(r => r.Word == "SITELOG" && r.Effects != StatementEffects.None);
+    }
+
+    [Fact]
+    public async Task AParserGapLeavesAMaskedNoteAndSendsNothingFurther()
+    {
+        Write("copy/XTRACE.cpy", A("01  XT-REC PIC X."));
+        Write("cobol/TRC.cbl", A("IDENTIFICATION DIVISION."), A("PROGRAM-ID. TRC."), A("DATA DIVISION."), A("WORKING-STORAGE SECTION."),
+            A("01  WS-A PIC X."), A("PROCEDURE DIVISION."), B("XTRACE WS-A."), B("GOBACK."));
+        var journalRoot = Path.Combine(_root, "journal");
+
+        var (output, _, _) = await Run("y\n", """{"category":"parser-gap","explanation":"XTRACE looks like standard COBOL."}""", journalRoot);
+
+        output.Should().Contain("teach-parser share gap-expected-statement").And.Contain("name(s) from your estate masked");
+        var note = File.ReadAllText(Path.Combine(NotesDir, "gap-expected-statement.md"));
+        note.Should().StartWith("# Starforge parser gap").And.Contain(">>").And.Contain("NAME1").And.NotContainAny("XTRACE", "WS-A", "TRC");
+        Journal(journalRoot)["groups"]![0]!["note"]!.GetValue<string>().Should().Be("gap-expected-statement");
+        File.Exists(_rulesPath).Should().BeFalse();
     }
 
     [Fact]

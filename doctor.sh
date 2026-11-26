@@ -338,7 +338,7 @@ show_usage() {
     echo -e "  ${GREEN}rekt-full${NC}       Run parse then ingest"
     echo -e "                  ${CYAN}--parallel N${NC} parses N programs at once (1-16, default 1 or REKT_PARSE_JOBS)"
     echo -e "  ${GREEN}rekt-status${NC}     Show REKT container, graph, and export status"
-    echo -e "  ${GREEN}teach-parser${NC}    Teach Starforge code it could not read, with your own AI endpoint (asks before sending)"
+    echo -e "  ${GREEN}teach-parser${NC}    Teach Starforge code it could not read, with your own AI endpoint (asks once per estate before sending)"
     echo -e "                  ${CYAN}run${NC} (default) | ${CYAN}report${NC} | ${CYAN}list${NC} | ${CYAN}remove <id>${NC} | ${CYAN}share <id>${NC}; rules stay in Config/starforge-dialect.local.json"
     echo -e "  ${GREEN}verify-ai-loop${NC}  Check the running portal's AI Loop catalogues native scans:"
     echo -e "                  ${CYAN}--scan <name>${NC} (repeatable, under output/rekt-scans) ${CYAN}[--model-run <id>]${NC}"
@@ -3558,26 +3558,46 @@ starforge_estate_dirs() {
     fi
 }
 
-# ./doctor.sh teach-parser [run|report|list|remove <id>|share <id>]. See docs/teach-the-parser.md.
+# STARFORGE_TEACH: auto (default) teaches after a Starforge parse once you have agreed for the estate,
+# review decides group by group, off only lists what could not be read.
+starforge_teach_mode() {
+    local mode
+    mode="$(resolve_runtime_setting STARFORGE_TEACH auto)"
+    case "$mode" in
+        auto|review|off) printf '%s' "$mode" ;;
+        *)
+            echo -e "${YELLOW}⚠️  STARFORGE_TEACH='$mode' is not auto, review or off; using review.${NC}" >&2
+            printf 'review' ;;
+    esac
+}
+
+# ./doctor.sh teach-parser [run|report|list|remove <id>|share <id>|forget]. See docs/teach-the-parser.md.
 run_teach_parser() {
     local sub="${1:-run}"
     (( $# == 0 )) || shift
     case "$sub" in
-        run|report|list|remove|share) ;;
+        run|report|list|remove|share|forget) ;;
         *)
-            echo -e "${RED}❌ Usage: ./doctor.sh teach-parser [run|report|list|remove <id>|share <id>]${NC}" >&2
+            echo -e "${RED}❌ Usage: ./doctor.sh teach-parser [run [--review]|report|list|remove <id>|share <id> [--github]|forget]${NC}" >&2
             return 2 ;;
     esac
     ensure_lma_cli || return 1
     local -a args=("$sub")
-    if [[ "$sub" == run || "$sub" == report ]]; then
+    if [[ "$sub" == forget ]]; then
+        (cd "$REPO_ROOT" && lma_cli teach-parser forget)
+        return
+    fi
+    if [[ "$sub" == run && "$(starforge_teach_mode)" == review && " $* " != *" --review "* ]]; then
+        args+=(--review)
+    fi
+    if [[ "$sub" == run || "$sub" == report || "$sub" == share ]]; then
         local dirs dir
         dirs="$(starforge_estate_dirs)" || return 1
-        if [[ -z "$dirs" ]]; then
+        if [[ -z "$dirs" && "$sub" != share ]]; then
             echo -e "${RED}❌ No COBOL programs in source/.${NC}" >&2
             return 1
         fi
-        while IFS= read -r dir; do args+=(--source "$dir"); done <<< "$dirs"
+        while IFS= read -r dir; do [[ -n "$dir" ]] && args+=(--source "$dir"); done <<< "$dirs"
     fi
     if [[ "$sub" == run ]] && ! { load_configuration >/dev/null && load_ai_config >/dev/null 2>&1; }; then
         echo -e "${RED}❌ No AI configuration. Run ./doctor.sh setup first.${NC}" >&2
@@ -3593,33 +3613,48 @@ starforge_rules_checksum() {
     return 0
 }
 
-# After a Starforge parse: list the code it could not read and offer to teach it. <rerun> is the
-# command to repeat when new rules are saved; "hint" prints the command instead of asking.
+# After a Starforge parse: list the code it could not read and teach it (STARFORGE_TEACH). <rerun> is
+# the command to repeat when new rules are saved; "hint" prints the command instead of teaching.
 starforge_offer_teach() {
-    local rerun="$1" mode="${2:-ask}" report before choice
+    local rerun="$1" mode="${2:-teach}" report before choice teach
     [[ "$PARSER_ENGINE" == starforge ]] || return 0
     report="$(run_teach_parser report 2>/dev/null)" || return 0
     grep -q '^Places it could not read' <<< "$report" || return 0
     echo ""
     echo -e "${CYAN}Starforge could not read some code. Programs with these places are Partial:${NC}"
     grep -v '^Teach Starforge these' <<< "$report" | grep -v '^$' | sed 's/^/  /'
-    if [[ "$mode" != ask || ! -t 0 || ! -t 1 ]]; then
+    teach="$(starforge_teach_mode)"
+    if [[ "$mode" != teach || "$teach" == off ]]; then
+        [[ "$teach" == off ]] && echo -e "  ${BLUE}Teaching is off (STARFORGE_TEACH=off).${NC}"
         echo -e "  ${BLUE}To teach Starforge with your own AI endpoint: ./doctor.sh teach-parser${NC}"
         return 0
     fi
-    echo ""
-    echo -e "  ${GREEN}1)${NC} Teach Starforge with my AI endpoint (shows what would be sent and asks first)"
-    echo -e "  ${GREEN}2)${NC} Skip (default)"
-    read -r -p "  Choice [2]: " choice
-    [[ "$choice" == 1 ]] || return 0
     before="$(starforge_rules_checksum)"
-    run_teach_parser run || return 0
+    if [[ "$teach" == auto ]]; then
+        echo ""
+        run_teach_parser run || return 0
+    else
+        if [[ ! -t 0 || ! -t 1 ]]; then
+            echo -e "  ${BLUE}To teach Starforge with your own AI endpoint: ./doctor.sh teach-parser${NC}"
+            return 0
+        fi
+        echo ""
+        echo -e "  ${GREEN}1)${NC} Teach Starforge with my AI endpoint (shows what would be sent and asks first)"
+        echo -e "  ${GREEN}2)${NC} Skip (default)"
+        read -r -p "  Choice [2]: " choice
+        [[ "$choice" == 1 ]] || return 0
+        run_teach_parser run || return 0
+    fi
     [[ "$(starforge_rules_checksum)" != "$before" ]] || return 0
     echo ""
-    read -r -p "  Parse again with the new rules now? [Y/n]: " choice
-    if [[ "$choice" =~ ^[Nn] ]]; then
-        echo -e "  ${BLUE}The next parse uses them: ./doctor.sh ${rerun//_/-}${NC}"
-        return 0
+    if [[ "$teach" == review ]]; then
+        read -r -p "  Parse again with the new rules now? [Y/n]: " choice
+        if [[ "$choice" =~ ^[Nn] ]]; then
+            echo -e "  ${BLUE}The next parse uses them: ./doctor.sh ${rerun//_/-}${NC}"
+            return 0
+        fi
+    else
+        echo -e "  ${BLUE}New rules saved; parsing again with them.${NC}"
     fi
     # Cached results were made without the new rules.
     _REKT_INCREMENTAL=false "run_$rerun" || return $?

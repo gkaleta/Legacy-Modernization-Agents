@@ -64,7 +64,7 @@ public sealed class AiLoopReaderTests : IDisposable
     {
         TeachJournal("teach-1", new
         {
-            schemaVersion = 1, activityKind = "teach-parser", name = "teach-1", status = "completed",
+            schemaVersion = 1, activityKind = "teach-parser", name = "teach-1", status = "completed", mode = "automatic",
             startedAt = T0, updatedAt = T0.AddMinutes(2), finishedAt = T0.AddMinutes(2),
             endpoint = new { service = "AzureOpenAI", endpoint = "https://example.invalid", model = "m1" },
             before = new { programs = 3, places = 2, groups = 2 }, after = new { programs = 3, places = 1, groups = 1 },
@@ -75,6 +75,7 @@ public sealed class AiLoopReaderTests : IDisposable
                       category = "dialect-rule", ruleId = "copy-include", check = new { @fixed = 1, places = 1, passed = true },
                       outcome = "Saved.", saved = true },
                 new { label = "XTRACE", prompt = "XTRACE W1.", decision = "skipped" },
+                new { label = "(no word)", prompt = "W1.", decision = "sent", category = "parser-gap", note = "gap-expected-statement" },
             },
         });
         TeachJournal("not-matching", new { schemaVersion = 1, activityKind = "teach-parser", name = "other", startedAt = T0, groups = Array.Empty<object>() });
@@ -83,10 +84,12 @@ public sealed class AiLoopReaderTests : IDisposable
         var summary = Assert.Single(await reader.ListRunsAsync());
         Assert.Equal("teach-parser", summary.ActivityKind);
         Assert.Equal("teach:teach-1", summary.ActivityId);
-        Assert.Equal(1, summary.Calls);
+        Assert.Equal(2, summary.Calls);
         var teach = (await reader.GetRunAsync(summary.RunId))!.Teach!;
         Assert.Equal("m1", teach.Endpoint!.Model);
-        Assert.Equal(new[] { "sent", "skipped" }, teach.Groups.Select(g => g.Decision));
+        Assert.Equal(new[] { "sent", "skipped", "sent" }, teach.Groups.Select(g => g.Decision));
+        Assert.Equal("automatic", teach.Mode);
+        Assert.Equal("gap-expected-statement", teach.Groups[2].Note);
         Assert.Equal("++INCLUDE W1", teach.Groups[0].Prompt);
         Assert.True(teach.Groups[0].Check!.Passed);
         Assert.Equal(1, teach.After!.Places);
