@@ -213,6 +213,7 @@ REFERENCE these and do NOT declare them — another file owns them:
         `public static <Type> FromImage(string image)` (Java: toImage / fromImage): the
         record's fixed-width image, used wherever code holds the record as a string. No
         other constructors or conversion methods are part of the contract.
+      – {{MemberAccess}}
       – Code that uses the type uses exactly these names. A `COPY … REPLACING` is another
         instance of the same type, named after its replacement text; members never
         carry the replaced placeholder.

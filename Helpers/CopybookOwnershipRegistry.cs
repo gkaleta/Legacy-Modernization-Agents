@@ -175,11 +175,21 @@ public sealed class CopybookOwnershipRegistry
                 ["SharedNamespace"] = ConversionNamespacePolicy.ForSharedTypes(targetLanguage),
                 ["Declares"] = declares.Length == 0 ? "  (none)" : declares.ToString().TrimEnd(),
                 ["References"] = references.Length == 0 ? "  (none)" : references.ToString().TrimEnd(),
+                ["MemberAccess"] = MemberAccess(targetLanguage),
                 ["Scope"] = isCopybook
                     ? PromptLoader.LoadSectionValidated("RektContext", "CopybookScope", new Dictionary<string, string>())
                     : string.Empty,
             });
     }
+
+    // The owner and the users are converted apart, so both must be told the same access form.
+    // Left open, a Java owner wrote private fields with getters and its users assigned the fields.
+    private static string MemberAccess(string targetLanguage) =>
+        ConversionNamespacePolicy.IsCSharp(targetLanguage)
+            ? "Each member is a public property with get and set, used as record.Name."
+            : "Each member is a private field reached only through public accessors: member orderTotal is read"
+              + Environment.NewLine + "        with getOrderTotal() and written with setOrderTotal(value); a boolean member"
+              + Environment.NewLine + "        uses isName() and setName(boolean). Code in another class never reads or assigns the field.";
 
     public IReadOnlyList<CopybookMember> MembersOf(string copybook) =>
         _members.TryGetValue(copybook, out var members) ? members : [];

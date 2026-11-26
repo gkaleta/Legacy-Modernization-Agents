@@ -47,6 +47,22 @@ public sealed class CopybookOwnershipRegistryTests : IDisposable
         ownership.UsedBy.Should().BeEquivalentTo("ORDER");
     }
 
+    // Converted apart, a Java owner wrote private fields with getters while its users assigned the
+    // fields; hundreds of "has private access" errors. Owner and users get the same access rule.
+    [Fact]
+    public void OwnerAndUsersAreToldTheSameMemberAccess()
+    {
+        Copybook("ORDDATAI");
+        Program("ORDDA11", "ORDDATAI");
+        var registry = Build();
+
+        foreach (var file in new[] { "ORDDATAI", "ORDDA11" })
+        {
+            registry.ToPromptBlock(file, "Java").Should().Contain("getOrderTotal()").And.Contain("never reads or assigns the field");
+            registry.ToPromptBlock(file, "C#").Should().Contain("public property with get and set");
+        }
+    }
+
     // The exact failure measured on the estate: ORDDATAI was declared by its own converted file
     // and by eight others that copy it.
     [Fact]
