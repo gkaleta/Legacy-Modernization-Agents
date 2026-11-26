@@ -1,6 +1,7 @@
 using CobolToQuarkusMigration.Agents;
 using CobolToQuarkusMigration.Agents.Infrastructure.Facts;
 using CobolToQuarkusMigration.Helpers;
+using CobolToQuarkusMigration.Models;
 using FluentAssertions;
 using Xunit;
 
@@ -638,6 +639,36 @@ public class ConversionParityValidatorTests
         catalog.Contains("STUB-FIELD").Should().BeTrue();
         catalog.Contains("REAL-FIELD").Should().BeFalse("a real copybook must never have its fields excluded");
         catalog.Copybooks.Should().ContainSingle().Which.Should().Be("STUBBED");
+    }
+
+    [Fact]
+    public void Load_ReadsOnlyTheEstatesTheConversionSelected()
+    {
+        using var estate = new TempEstate();
+        var mine = Path.Combine(estate.Root, "source", "mine");
+        var other = Path.Combine(estate.Root, "source", "other");
+        foreach (var (dir, name) in new[] { (mine, "MINE"), (other, "OTHER") })
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".preprocessed"));
+            File.WriteAllText(Path.Combine(dir, "PROG.cbl"), "       PROGRAM-ID. PROG.\n");
+            File.WriteAllText(Path.Combine(dir, ".preprocessed", name + ".cpy"),
+                $"      *> {StubCopybookCatalog.Marker}\n       01 {name}-STUB PIC X.\n");
+        }
+
+        StubCopybookCatalog.Load(estate.Root, "source").Copybooks.Should().BeEquivalentTo("MINE", "OTHER");
+
+        try
+        {
+            ConversionSourceScope.Set([new CobolFile { FileName = "PROG.cbl", FilePath = Path.Combine(mine, "PROG.cbl") }]);
+            var catalog = StubCopybookCatalog.Load(estate.Root, "source");
+
+            catalog.Copybooks.Should().ContainSingle().Which.Should().Be("MINE");
+            catalog.Contains("OTHER-STUB").Should().BeFalse();
+        }
+        finally
+        {
+            ConversionSourceScope.Clear();
+        }
     }
 
     private sealed class TempEstate : IDisposable

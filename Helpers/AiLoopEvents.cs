@@ -145,6 +145,9 @@ public static class AiLoopEvents
         MetricsSink.EmitAmbient(new { Event = Stage, Number = number, Total = total, Name = name });
     }
 
+    /// <summary>Unnumbered stage for work inside a numbered step (the portal hides numbers from 99 up).</summary>
+    public static void SubStageStarted(string name) => StageStarted(99, 100, name);
+
     public static void Call(string agent, string provider, string model, string context, long durationMs,
         bool success, int promptChars, int responseChars, long? inputTokens, long? outputTokens, string? error,
         string? requestId = null, bool cancelled = false)

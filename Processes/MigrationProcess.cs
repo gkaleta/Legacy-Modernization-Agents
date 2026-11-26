@@ -603,6 +603,7 @@ public class MigrationProcess
             _sourceRoot!, outputFolder, _settings.ApplicationSettings.TargetLanguage, _settings.CompileGate, _logger,
             _parityRepairAgent is null ? null : _parityRepairAgent.RepairAsync, _execution, cancellationToken,
             _settings.ConversionSettings);
+        AiLoopEvents.SubStageStarted("Writing report");
         var totalTime = DateTime.UtcNow - startTime;
         var reportPath = Path.Combine(outputFolder, "migration-report.md");
 

@@ -54,6 +54,7 @@ public static class GeneratedOutputValidator
             }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         if (java) JavaProjectScaffold.Write(outputFolder, ConversionNamespacePolicy.Root("Java"),
             framework: JavaGeneration.Framework(conversionSettings));
+        AiLoopEvents.SubStageStarted("Conversion parity");
         var markdown = await ConversionParityPostPass.RunAsync(files, outputFolder, language, logger,
             sources.Select(SourcePathHelper.ForFile), repositoryRoot: repositoryRoot,
             repair: repair, sourceDirectory: sourceRoot, applyGate: false, cancellationToken: cancellationToken);
@@ -61,6 +62,7 @@ public static class GeneratedOutputValidator
         CompileGateResult? csharpBuild = null;
         if (settings.Enabled)
         {
+            AiLoopEvents.SubStageStarted("Compile gate");
             if (java)
                 javaBuild = await JavaCompileGate.RunAsync(outputFolder, settings, logger, cancellationToken,
                     execution?.MavenExecutable ?? "mvn", repair, files);
@@ -70,6 +72,7 @@ public static class GeneratedOutputValidator
                     null, settings, logger, cancellationToken: cancellationToken);
             foreach (var file in files)
                 if (File.Exists(file.FilePath)) file.Content = await File.ReadAllTextAsync(file.FilePath, cancellationToken);
+            AiLoopEvents.SubStageStarted("Parity recheck after compile");
             markdown = await ConversionParityPostPass.RunAsync(files, outputFolder, language, logger,
                 sources.Select(SourcePathHelper.ForFile), repositoryRoot: repositoryRoot,
                 sourceDirectory: sourceRoot, applyGate: false, preserveRepairHistory: true, cancellationToken: cancellationToken);

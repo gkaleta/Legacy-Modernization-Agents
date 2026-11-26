@@ -40,9 +40,15 @@ public sealed class StubCopybookCatalog
         if (!Directory.Exists(root)) return Empty;
 
         // Each top-level estate is preprocessed into its own <estate>/.preprocessed directory.
-        var dirs = new[] { Path.Combine(root, ".preprocessed") }
-            .Concat(Directory.EnumerateDirectories(root)
-                .Where(d => !Path.GetFileName(d).StartsWith('.'))
+        // A conversion reads only the estates its selected files live in, so another estate's
+        // stub names never reach this run's evidence or logs.
+        var estates = Directory.EnumerateDirectories(root)
+            .Where(d => !Path.GetFileName(d).StartsWith('.'))
+            .ToList();
+        var rootFilesInScope = !Helpers.ConversionSourceScope.IsSet
+            || Directory.EnumerateFiles(root).Any(Helpers.ConversionSourceScope.Contains);
+        var dirs = (rootFilesInScope ? new[] { Path.Combine(root, ".preprocessed") } : [])
+            .Concat(estates.Where(Helpers.ConversionSourceScope.Reaches)
                 .Select(d => Path.Combine(d, ".preprocessed")))
             .Where(Directory.Exists);
 

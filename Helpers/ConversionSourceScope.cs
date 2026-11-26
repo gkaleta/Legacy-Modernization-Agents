@@ -25,6 +25,15 @@ public static class ConversionSourceScope
 
     public static bool IsSet => Current.Value is not null;
 
+    /// <summary>True when no scope is set or a selected file lies inside <paramref name="directory"/>.</summary>
+    public static bool Reaches(string directory)
+    {
+        var scope = Current.Value;
+        if (scope is null) return true;
+        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + Path.DirectorySeparatorChar;
+        return scope.Paths.Any(path => path.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
     public static bool Contains(string path) => Current.Value?.Paths.Contains(Path.GetFullPath(path)) == true;
 
     public static void Clear() => Current.Value = null;

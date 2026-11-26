@@ -71,6 +71,30 @@ public sealed class GeneratedOutputValidatorTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_RecordsParityAndCompileAsAiLoopStages()
+    {
+        var (source, file) = await WriteAsync("public class Record { int neededValue = 1; }");
+        var executable = await MavenAsync("exit 0\n", "exit /b 0\r\n");
+        var originalRoot = Environment.GetEnvironmentVariable("REPO_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("REPO_ROOT", _root);
+            using (AiLoopEvents.BeginRun(424301, "full", "Java", _root))
+                await ValidateAsync([source], [file], executable);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("REPO_ROOT", originalRoot);
+        }
+
+        var stages = File.ReadAllLines(Path.Combine(_root, "output", ".metrics", "424301.jsonl"))
+            .Select(line => JsonDocument.Parse(line).RootElement)
+            .Where(e => e.GetProperty("event").GetString() == AiLoopEvents.Stage)
+            .Select(e => e.GetProperty("name").GetString());
+        stages.Should().Equal("Conversion parity", "Compile gate", "Parity recheck after compile");
+    }
+
+    [Fact]
     public async Task Run_CompileSuccessCannotConcealMissingConversionEvenWithWarnPolicy()
     {
         var (source, file) = await WriteAsync("public class Record { int neededValue = 1; }");
