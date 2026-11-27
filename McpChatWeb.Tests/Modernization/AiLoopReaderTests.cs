@@ -394,6 +394,23 @@ public sealed class AiLoopReaderTests : IDisposable
         Assert.Equal(T0, single.LastEventAt);
     }
 
+    [Fact]
+    public async Task ProgressIsReportedOnlyForTheStageItWasRecordedIn()
+    {
+        Metrics("8", Line(0, new { @event = "run_started", mode = "standard", targetLanguage = "Java", outputFolder = RunFolder }),
+            Line(1, new { @event = "stage", number = 99, total = 100, name = "Compile gate" }),
+            Line(2, new { @event = "progress", done = 1, total = 3, detail = "Repair round 1: 385 → 40 compile error(s)" }));
+
+        var progress = (await Reader().GetRunAsync("8"))!.Summary.Progress;
+        Assert.NotNull(progress);
+        Assert.Equal(("Compile gate", 1, 3, "Repair round 1: 385 → 40 compile error(s)"),
+            (progress.Stage, progress.Done, progress.Total, progress.Detail));
+
+        File.AppendAllLines(Path.Combine(_root, "output", ".metrics", "8.jsonl"),
+            [Line(3, new { @event = "stage", number = 99, total = 100, name = "Writing report" })]);
+        Assert.Null((await Reader().GetRunAsync("8"))!.Summary.Progress);
+    }
+
     private static string Line(int seconds, object payload)
     {
         var dict = new Dictionary<string, object?> { ["ts"] = T0.AddSeconds(seconds).ToString("o"), ["runId"] = "7" };

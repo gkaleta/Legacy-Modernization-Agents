@@ -652,6 +652,17 @@ class AiLoopView {
       </section>`;
   }
 
+  renderProgress(progress) {
+    if (!progress?.detail) return '';
+    const total = progress.total > 0 ? progress.total : null;
+    const done = total ? Math.min(progress.done, total) : null;
+    const pct = total ? Math.round(100 * done / total) : null;
+    return `<div class="ail-step-progress">
+      ${total ? `<div class="ail-step-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"
+        aria-label="${this.esc(progress.stage || 'Current step')}: ${done} of ${total}"><span style="width:${pct}%"></span></div>` : ''}
+      <p><strong>${this.esc(progress.stage || 'Current step')}</strong>${total ? ` · ${done} of ${total}` : ''} · ${this.esc(progress.detail)}</p></div>`;
+  }
+
   renderLoop(stages, summary, gates = [], requests = [], native = false) {
     const phases = native ? [...new Set(stages.map(stage => stage.name))].map(name => [name, null]) : [
       ['Discover', /discover|initializ/i], ['Analyze', /analy|dependenc|reverse|context/i],
@@ -699,6 +710,7 @@ class AiLoopView {
       <text x="170" y="177" text-anchor="middle">${native ? 'Native REKT' : 'AI Loop'}</text></svg>
       <div class="ail-activity" role="status" aria-live="polite"><span class="ail-activity-dot" aria-hidden="true"></span>
         ${this.esc(activity)}</div>
+      ${this.renderProgress(summary.progress)}
       ${live && !native ? `<p class="ail-request-activity">${inFlight.length
         ? `${inFlight.length} instrumented request${inFlight.length === 1 ? '' : 's'} in flight · ${inFlight.slice(0, 3).map(r => this.esc(r.agent || 'unknown agent')).join(', ')}${inFlight.length > 3 ? ' …' : ''}`
         : summary.startedRequests == null ? 'Request activity not recorded for this attempt.'

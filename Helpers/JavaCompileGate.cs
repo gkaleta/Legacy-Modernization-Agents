@@ -38,17 +38,26 @@ public static class JavaCompileGate
         }
         try
         {
+            var maxRounds = Math.Max(0, settings.MaxRepairRounds);
             result = await BuildAsync(folder, Timeout(settings), executable, cancellationToken);
             Record(result);
+            AiLoopEvents.ProgressUpdate(0, maxRounds, result.Compiled ? "First build compiled"
+                : $"First build: {result.Errors.Count} compile error(s)");
             while (!result.Compiled && result.Measured && result.Errors.Count > 0
-                   && repair is not null && round < Math.Max(0, settings.MaxRepairRounds))
+                   && repair is not null && round < maxRounds)
             {
                 var startedRound = false;
                 var originals = new Dictionary<string, string>();
                 var candidates = new Dictionary<string, string>();
-                foreach (var group in result.Errors.GroupBy(error => error.File))
+                var errorFiles = result.Errors.GroupBy(error => error.File).ToList();
+                var fileIndex = 0;
+                foreach (var group in errorFiles)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    fileIndex++;
+                    AiLoopEvents.ProgressUpdate(fileIndex - 1, errorFiles.Count,
+                        $"Repair round {round + (startedRound ? 0 : 1)} of {maxRounds}: file {fileIndex} of {errorFiles.Count} "
+                        + $"({result.Errors.Count} compile error(s) before this round)");
                     var path = Path.GetFullPath(Path.Combine(folder, group.Key));
                     var mapped = (generatedFiles ?? []).Where(file => !string.IsNullOrWhiteSpace(file.FilePath)
                         && Path.GetFullPath(file.FilePath) == path).ToList();
@@ -137,6 +146,8 @@ public static class JavaCompileGate
                     || measured.Errors.Count >= result.Errors.Count))
                 {
                     Record(measured, rolledBack: true);
+                    AiLoopEvents.ProgressUpdate(round, maxRounds, $"Repair round {round} rolled back: "
+                        + $"{result.Errors.Count} compile error(s) remain");
                     await RestoreAsync(originals);
                     logger.LogWarning("Java compile repair round {Round} rolled back: {Reason}.", round,
                         candidates.Count == 0 ? "every candidate introduced syntax errors" : "compiler failures did not decrease");
@@ -144,6 +155,9 @@ public static class JavaCompileGate
                     break;
                 }
                 Record(measured);
+                AiLoopEvents.ProgressUpdate(round, maxRounds, measured.Compiled
+                    ? $"Repair round {round}: compiled ({result.Errors.Count} error(s) before)"
+                    : $"Repair round {round}: {result.Errors.Count} → {measured.Errors.Count} compile error(s)");
                 result = measured;
                 foreach (var file in generatedFiles ?? [])
                     if (candidates.TryGetValue(file.FilePath, out var content)) file.Content = content;

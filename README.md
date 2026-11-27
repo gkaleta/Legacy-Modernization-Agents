@@ -343,7 +343,7 @@ flowchart TD
 4. **Conversion:** the **Java or C# converter agent** writes the target code, splitting large programs into chunks. The **output guard** rejects empty, truncated or placeholder answers before anything is written.
 5. **Compile gate:** the output is built (`dotnet build` or `mvn compile`). Compiler errors go to a repair agent file by file, for at most `CompileGate.MaxRepairRounds` rounds; a round that makes things worse is undone.
 6. **Parity:** a deterministic check compares procedures, fields, calls and SQL in the output with the COBOL. **ParityRepairAgent** fills the gaps it finds, and a fix is kept only if the re-measured score improves.
-7. **Report:** results land in `output/<language>/<run>/` (`compile-status.json`, `conversion-parity.json`, migration report), and the **🔁 AI Loop** tab shows every call, retry and gate.
+7. **Report:** results land in `output/<language>/<run>/` (`compile-status.json`, `conversion-parity.json`, migration report), and the **🔁 AI Loop** tab shows every call, retry and gate, with a progress bar for the step that is running (for example compile repair round 2 of 5, or parity program 12 of 55).
 
 See [Architecture](docs/architecture.md) for agent inputs and outputs, storage and data flow.
 
@@ -405,7 +405,7 @@ Values load in the order `appsettings.json` → `ai-config.local.env` → enviro
 | Neo4j connection refused | Load `NEO4J_PASSWORD` from `Config/ai-config.local.env`, then run `docker-compose up -d neo4j` |
 | Azure API error | Check `Config/ai-config.local.env` credentials or run `az login` |
 | No output generated | Ensure COBOL files are in `source/` |
-| Portal won't start | `lsof -ti :5028 \| xargs kill -9` then retry |
+| Portal won't start, or opens on another port | The portal uses port 5028 unless `MCP_WEB_PORT` is set in `Config/ai-config.local.env`; remove that line so every checkout uses 5028. `./doctor.sh portal` stops whatever listens on that port before it starts |
 | A scan or command reports *Internal helper crashed* | A .NET helper threw an unhandled exception. The stack trace is in `Logs/doctor-helpers.log` and, for scans, in `helper-crashes.log` beside `scan.json`. Run `./doctor.sh` to check prerequisites, then rerun |
 | Build fails with `MSB3923 Failed to download file … github-copilot-…tgz`, or setup says *Could not fetch user-specific models* | The network blocks the GitHub release the Copilot SDK downloads its CLI from. `doctor.sh` falls back to your installed Copilot CLI automatically; for plain `dotnet` commands, see [Building behind a download block](docs/building-behind-an-npm-registry-block.md) |
 | `rekt-full` stops with *Source identity collisions prevent safe REKT staging* | REKT reads copybooks by name from one folder, so it stops only when two copybooks share a name, differ, and a `COPY` or `INCLUDE` uses that name. The message lists the copies and the files that use them. Rename one copy, or move the estate you are not parsing out of `source/`. Copies with the same text, or that nothing uses, are staged and reported as a note |

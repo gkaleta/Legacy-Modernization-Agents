@@ -111,6 +111,11 @@ html[data-theme="dark"], [data-portal-theme="dark"] {
 .ail-loop .ail-phase-gate-fail .ail-phase-gate-label, .ail-loop .ail-status-failed { fill: var(--cp-danger); }
 .ail-loop .ail-phase-gate-warn .ail-phase-gate-label { fill: var(--cp-warning); }
 .ail-activity { font-weight: 600; overflow-wrap: anywhere; }
+.ail-step-progress { margin: 8px 0 4px; }
+.ail-step-progress p { margin: 4px 0 0; color: var(--cp-text-muted); overflow-wrap: anywhere; }
+.ail-step-progress strong { color: var(--cp-text); }
+.ail-step-bar { height: 8px; border-radius: 999px; background: var(--cp-surface-soft); border: 1px solid var(--cp-border); overflow: hidden; }
+.ail-step-bar span { display: block; height: 100%; background: var(--cp-accent); transition: width .3s ease; }
 .ail-activity-dot {
   display: inline-block;
   width: 8px;

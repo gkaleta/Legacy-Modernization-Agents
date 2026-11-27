@@ -1,6 +1,7 @@
 // Post-conversion parity check. Runs after files are written so it can see the diagnostic
 // stubs ConversionOutputGuard produces at write time.
 
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using CobolToQuarkusMigration.Agents.Infrastructure.Facts;
@@ -102,14 +103,17 @@ public static class ConversionParityPostPass
         // program. Scoring them individually would report a correct split as several failures.
         var byProgram = files
             .Where(f => !string.IsNullOrWhiteSpace(FileIdentity(f)))
-            .GroupBy(FileIdentity, StringComparer.OrdinalIgnoreCase);
+            .GroupBy(FileIdentity, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         var converted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        var checkedPrograms = 0;
         foreach (var group in byProgram)
         {
             var program = group.Key;
             converted.Add(program);
+            AiLoopEvents.ProgressUpdate(checkedPrograms++, byProgram.Count, $"Checking {Path.GetFileName(program)} ({checkedPrograms} of {byProgram.Count})");
             cancellationToken.ThrowIfCancellationRequested();
             if (group.Any(file => conflictingOutputs.Contains(Path.GetFullPath(file.FilePath))))
             {
@@ -175,6 +179,9 @@ public static class ConversionParityPostPass
                 {
                     var source = await File.ReadAllTextAsync(sourcePath, cancellationToken);
                     var current = group.ToDictionary(f => f.FilePath, f => File.ReadAllText(f.FilePath));
+                    AiLoopEvents.ProgressUpdate(checkedPrograms - 1, byProgram.Count,
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"Repairing {Path.GetFileName(program)} ({checkedPrograms} of {byProgram.Count}, score {result.Score:0.00} below {threshold:0.00})"));
                     result = await RepairAsync(result, source, current, targetLanguage, threshold,
                         repair, candidate => ConversionParityValidator.Evaluate(
                             program, generatedFile, string.Join("\n", candidate.Values), context, facts, stubCopybooks),
@@ -205,6 +212,10 @@ public static class ConversionParityPostPass
         }
         var report = BuildReport(results, targetLanguage, threshold, gate);
         await WriteArtifactAsync(report, outputFolder, logger);
+        AiLoopEvents.ProgressUpdate(byProgram.Count, byProgram.Count,
+            string.Create(CultureInfo.InvariantCulture,
+                $"{report.Programs.Count - report.BelowThresholdCount - report.NotEvaluatedCount} of {report.Programs.Count} program(s) at or above {threshold:0.00}")
+            + (report.NotEvaluatedCount > 0 ? $", {report.NotEvaluatedCount} not evaluated" : ""));
 
         if (applyGate && gate == ParityGate.Stop && report.BelowThresholdCount > 0)
         {

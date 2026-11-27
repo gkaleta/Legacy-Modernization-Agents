@@ -71,7 +71,7 @@ public sealed class GeneratedOutputValidatorTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_RecordsParityAndCompileAsAiLoopStages()
+    public async Task Run_RecordsParityAndCompileStagesWithProgress()
     {
         var (source, file) = await WriteAsync("public class Record { int neededValue = 1; }");
         var executable = await MavenAsync("exit 0\n", "exit /b 0\r\n");
@@ -87,11 +87,16 @@ public sealed class GeneratedOutputValidatorTests : IDisposable
             Environment.SetEnvironmentVariable("REPO_ROOT", originalRoot);
         }
 
-        var stages = File.ReadAllLines(Path.Combine(_root, "output", ".metrics", "424301.jsonl"))
-            .Select(line => JsonDocument.Parse(line).RootElement)
-            .Where(e => e.GetProperty("event").GetString() == AiLoopEvents.Stage)
-            .Select(e => e.GetProperty("name").GetString());
-        stages.Should().Equal("Conversion parity", "Compile gate", "Parity recheck after compile");
+        var events = File.ReadAllLines(Path.Combine(_root, "output", ".metrics", "424301.jsonl"))
+            .Select(line => JsonDocument.Parse(line).RootElement).ToList();
+        events.Where(e => e.GetProperty("event").GetString() == AiLoopEvents.Stage)
+            .Select(e => e.GetProperty("name").GetString())
+            .Should().Equal("Conversion parity", "Compile gate", "Parity recheck after compile");
+        var progress = events.Where(e => e.GetProperty("event").GetString() == AiLoopEvents.Progress)
+            .Select(e => (e.GetProperty("done").GetInt32(), e.GetProperty("total").GetInt32(), e.GetProperty("detail").GetString()))
+            .ToList();
+        progress.Should().Contain((0, 1, "First build compiled"));
+        progress.Last().Should().Be((1, 1, "1 of 1 program(s) at or above 0.75"));
     }
 
     [Fact]

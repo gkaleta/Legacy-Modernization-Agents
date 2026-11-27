@@ -32,7 +32,10 @@ public sealed record AiLoopRunSummary(
     int? AttemptIndex = null,
     DateTime? LastEventAt = null,
     string ActivityKind = "model-attempt",
-    string? ActivityId = null);
+    string? ActivityId = null,
+    AiLoopProgress? Progress = null);
+
+public sealed record AiLoopProgress(string? Stage, int Done, int Total, string Detail, DateTime At);
 
 public sealed record AiLoopStage(int Number, int Total, string Name, DateTime StartedAt, long? DurationMs);
 
@@ -553,7 +556,17 @@ public sealed partial class AiLoopReader
                 && e.Str("requestId") is { } id && !completedRequestIds.Contains(id)) : null,
             FailureReason(finished) ?? (superseded && finished is null
                 ? "A later attempt started without a recorded finish for this attempt. Its completion outcome and exit time are unknown." : null),
-            LastEventAt: events.Where(e => e.Ts != DateTime.MinValue).Select(e => (DateTime?)e.Ts).Max());
+            LastEventAt: events.Where(e => e.Ts != DateTime.MinValue).Select(e => (DateTime?)e.Ts).Max(),
+            Progress: LatestProgress(events, stage));
+    }
+
+    // Progress belongs to the stage it was reported in; an older stage's position would read as current.
+    private static AiLoopProgress? LatestProgress(List<MetricEvent> events, MetricEvent? stage)
+    {
+        var last = events.LastOrDefault(e => e.Event == AiLoopEvents.Progress && (stage is null || e.Ts >= stage.Ts));
+        return last?.Str("detail") is { } detail
+            ? new(stage?.Str("name"), (int)(last.Long("done") ?? 0), (int)(last.Long("total") ?? 0), detail, last.Ts)
+            : null;
     }
 
     private static List<AiLoopStage> Stages(List<MetricEvent> events, AiLoopRunSummary summary)

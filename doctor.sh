@@ -2504,7 +2504,7 @@ run_reverse_engineering() {
         echo "    inject them into conversion prompts (or pass --skip-reverse-engineering --reuse-re)"
         echo ""
         echo -e "${CYAN}📄 View in Portal:${NC}"
-        echo "  • Portal running at: http://localhost:5028"
+        echo "  • Portal running at: http://localhost:${DEFAULT_MCP_PORT}"
         echo "  • Click '📄 Reverse Engineering Results' button to view the full RE report"
         echo "  • Each run card now has a '🔬 RE Results' button to view or delete persisted results"
         echo ""
@@ -2523,7 +2523,7 @@ run_reverse_engineering() {
         echo ""
         echo -e "${RED}❌ Reverse engineering failed (exit code $exit_code)${NC}"
         if [ -n "$PORTAL_PID" ]; then
-            echo -e "${YELLOW}Portal is still running at http://localhost:5028 for debugging${NC}"
+            echo -e "${YELLOW}Portal is still running at http://localhost:${DEFAULT_MCP_PORT} for debugging${NC}"
         fi
     fi
 
@@ -5817,7 +5817,7 @@ check_chunking_health() {
     echo "   • SmartMigrationOrchestrator routes files to appropriate process"
     echo "   • Full migration uses ChunkedMigrationProcess for conversion"
     echo "   • RE-only mode uses ChunkedReverseEngineeringProcess for analysis"
-    echo "   • Monitor progress in portal: http://localhost:5028"
+    echo "   • Monitor progress in portal: http://localhost:${DEFAULT_MCP_PORT}"
     echo "   • Adjust MaxLinesPerChunk in appsettings.json for tuning"
     echo ""
     echo -e "${GREEN}📊 Output Validation:${NC}"

@@ -339,6 +339,19 @@ test('repeated phases remain current and gate outcomes are independent evidence'
   assert.doesNotMatch(warning, /ail-phase-gate-pass|ail-phase-active/);
 });
 
+test('step progress shows position and escaped detail, and no bar without a total', () => {
+  const { view } = fixture(() => { throw new Error('unexpected fetch'); });
+  const html = view.renderLoop([{ name: 'Compile gate' }], { status: 'running', currentStage: 'Compile gate',
+    progress: { stage: 'Compile gate', done: 2, total: 5, detail: 'Repair round 2: 40 → 6 <errors>' } });
+  assert.match(html, /aria-valuenow="2"/);
+  assert.match(html, /width:40%/);
+  assert.match(html, /<strong>Compile gate<\/strong> · 2 of 5 · Repair round 2: 40 → 6 &lt;errors&gt;/);
+  const untotalled = view.renderLoop([], { status: 'running', progress: { stage: 'Parity', done: 0, total: 0, detail: 'Starting' } });
+  assert.doesNotMatch(untotalled, /role="progressbar"/);
+  assert.match(untotalled, /<strong>Parity<\/strong> · Starting/);
+  assert.doesNotMatch(view.renderLoop([], { status: 'running' }), /ail-step-progress/);
+});
+
 test('only recorded outstanding instrumented requests establish live request activity', () => {
   const { view } = fixture(() => { throw new Error('unexpected fetch'); });
   const summary = { status: 'running', currentStage: 'COBOL Analysis', startedRequests: 2 };

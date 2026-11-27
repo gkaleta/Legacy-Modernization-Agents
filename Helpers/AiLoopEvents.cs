@@ -50,6 +50,7 @@ public static class AiLoopEvents
     public const string RunStarted = "run_started";
     public const string RunFinished = "run_finished";
     public const string Stage = "stage";
+    public const string Progress = "progress";
     public const string LlmCall = "llm_call";
     public const string LlmRetry = "llm_retry";
     public const string LlmFallback = "llm_fallback";
@@ -145,8 +146,15 @@ public static class AiLoopEvents
         MetricsSink.EmitAmbient(new { Event = Stage, Number = number, Total = total, Name = name });
     }
 
-    /// <summary>Unnumbered stage for work inside a numbered step (the portal hides numbers from 99 up).</summary>
+    // Numbers from 99 up are hidden by the portal, so these read as sub-steps of the numbered step.
     public static void SubStageStarted(string name) => StageStarted(99, 100, name);
+
+    // Long gates (compile repair, parity) run for many minutes inside one stage; this is their live position.
+    public static void ProgressUpdate(int done, int total, string detail)
+    {
+        if (MetricsSink.CurrentRunId is null || IsFinished) return;
+        MetricsSink.EmitAmbient(new { Event = Progress, Done = Math.Max(0, done), Total = Math.Max(0, total), Detail = detail });
+    }
 
     public static void Call(string agent, string provider, string model, string context, long durationMs,
         bool success, int promptChars, int responseChars, long? inputTokens, long? outputTokens, string? error,

@@ -1,4 +1,4 @@
-**Last updated**: 2026-11-18
+**Last updated**: 2026-11-27
 
 # Estate Mission Control and the AI Loop
 
@@ -212,7 +212,8 @@ Each run writes its events to `output/.metrics/<runId>.jsonl`, through the same 
 | Event | Written when |
 |-------|--------------|
 | `run_started` | An attempt begins. Records mode, language, relative output folder, a new `attemptId`, `telemetryVersion: 2`, and `requestCoverage: agent-boundary`. Portal subprocesses also carry their `managedRunId` through `AI_LOOP_MANAGED_RUN_ID` |
-| `stage` | The run moves to its next step |
+| `stage` | The run moves to its next step. Output validation records its own steps: `Conversion parity`, `Compile gate`, `Parity recheck after compile` and `Writing report` |
+| `progress` | A long step reports its position: `done`, `total` and a plain-text `detail`, such as the compile repair round and error count or the program being checked for parity. The portal shows the latest one for the current stage as a progress bar under the ring; it is a position, not a pass |
 | `llm_request_started` | An instrumented agent dispatches a request after acquiring its limiter reservation. Records `requestId`, agent, provider, model and context identifier |
 | `llm_call` | A request succeeds, fails or is cancelled. Retains the existing event name and fields, adding the matching `requestId` and explicit `outcome`. Sizes and reported token counts are metadata only |
 | `llm_retry` | A call is retried: `transient_error`, `rate_limit`, `reasoning_exhaustion` or `output_truncation` |
