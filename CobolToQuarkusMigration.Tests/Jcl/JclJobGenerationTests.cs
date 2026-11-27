@@ -219,7 +219,9 @@ public class JclJobGenerationTests
         var run = Directory.CreateTempSubdirectory("jj-run").FullName;
         try
         {
-            File.WriteAllText(Path.Join(source, "J.jcl"), "//J        JOB\n//S1       EXEC PGM=P1\n//S2       EXEC PGM=P2\n");
+            File.WriteAllText(Path.Join(source, "J.jcl"), "//J        JOB\n//S1       EXEC PGM=P1\n//S2       EXEC PGM=P2\n//S3       EXEC PGM=P3\n");
+            File.WriteAllText(Path.Join(source, "P3.cbl"), "");
+            File.WriteAllText(Path.Join(source, "P2.pli"), "");
             Directory.CreateDirectory(Path.Join(run, "Jobs"));
             File.WriteAllText(Path.Join(run, "Jobs", "OldJob.g.cs"), "// Generated from the estate's JCL. Rewritten on every run; do not edit.\n");
             File.WriteAllText(Path.Join(run, "Jobs", "Mine.g.cs"), "// hand-written\n");
@@ -232,7 +234,9 @@ public class JclJobGenerationTests
             File.Exists(Path.Join(run, JclJobWriter.CSharpRuntimeFile)).Should().BeTrue();
             File.ReadAllText(Path.Join(run, "Jobs", "JJob.g.cs")).Should().Contain("namespace " + ConversionNamespacePolicy.ForJobs("C#"));
             var manifest = File.ReadAllText(Path.Join(run, JclJobWriter.ManifestFile));
-            manifest.Should().Contain("\"programsImplemented\": [\n      \"P1\"").And.Contain("\"programsMissing\": [\n      \"P2\"");
+            manifest.Should().Contain("\"programsImplemented\": [\n      \"P1\"").And.Contain("\"programsMissing\": [\n      \"P2\",\n      \"P3\"");
+            // P3 has COBOL source and can still be converted; P2 has none, so no conversion will produce it.
+            manifest.Should().Contain("\"programsWithoutSource\": [\n      \"P2\"\n    ]");
         }
         finally
         {

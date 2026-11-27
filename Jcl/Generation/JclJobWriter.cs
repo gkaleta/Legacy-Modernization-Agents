@@ -17,7 +17,10 @@ public sealed record JclJobManifestEntry(
     IReadOnlyList<string> ProgramsImplemented,
     IReadOnlyList<string> ProgramsMissing,
     IReadOnlyList<string> StepsNotRunnable,
-    IReadOnlyList<JclDiagnostic> Diagnostics);
+    IReadOnlyList<JclDiagnostic> Diagnostics,
+    // Missing programs with no COBOL source in the estate (another language, or never supplied):
+    // no conversion can produce them, unlike a program that simply has not been converted yet.
+    IReadOnlyList<string>? ProgramsWithoutSource = null);
 
 // Renders job plans as code in the target language, over a runtime that ships with them.
 public static class JclJobWriter
@@ -91,7 +94,7 @@ public static class JclJobWriter
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, file.Content);
         }
-        File.WriteAllText(manifest, Manifest(plans, ImplementedPrograms(outputRoot, targetLanguage)));
+        File.WriteAllText(manifest, Manifest(plans, ImplementedPrograms(outputRoot, targetLanguage), CobolSourcePrograms(sourceRoot)));
         // C# gets its project file from the conversion's scaffold; the Spring Boot build is the jobs'.
         if (!csharp) JavaProjectScaffold.Write(outputRoot, ConversionNamespacePolicy.Root("Java"), ns + ".JclBatchApplication");
         return plans.Count;
@@ -119,7 +122,20 @@ public static class JclJobWriter
         return found;
     }
 
-    public static string Manifest(IReadOnlyList<JclJobPlan> plans, IReadOnlySet<string> implemented)
+    private static readonly string[] CobolExtensions = [".cbl", ".cob", ".ccp", ".cobol"];
+
+    // Program names the estate has COBOL source for, by file stem.
+    public static IReadOnlySet<string> CobolSourcePrograms(string sourceRoot)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(sourceRoot)) return found;
+        foreach (var file in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            if (CobolExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                found.Add(Path.GetFileNameWithoutExtension(file));
+        return found;
+    }
+
+    public static string Manifest(IReadOnlyList<JclJobPlan> plans, IReadOnlySet<string> implemented, IReadOnlySet<string>? cobolSource = null)
     {
         var entries = plans.Select(plan => new JclJobManifestEntry(
             plan.JobName,
@@ -131,7 +147,9 @@ public static class JclJobWriter
             plan.Steps.Where(s => s.Kind == JclPlanStepKind.Unresolved || s.GuardError is not null ||
                 (s.Kind == JclPlanStepKind.Utility && s.Program?.ToUpperInvariant() is not ("IEFBR14" or "IDCAMS")))
                 .Select(s => s.Name).ToList(),
-            plan.Diagnostics)).ToList();
+            plan.Diagnostics,
+            cobolSource is null ? null
+                : plan.Programs.Where(p => !implemented.Contains(p) && !cobolSource.Contains(p)).ToList())).ToList();
         return JsonSerializer.Serialize(entries, JclEstate.JsonOptions);
     }
 

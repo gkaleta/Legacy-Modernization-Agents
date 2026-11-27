@@ -535,6 +535,35 @@ public class ConversionParityValidatorTests
     }
 
     [Fact]
+    public void Evaluate_CopybookOfOnlyConditionNamesIsMeasuredOnThoseNames()
+    {
+        var context = new StructuralContext
+        {
+            Program = "FEEDBACK.cpy",
+            Provenance = StructuralProvenance.SourceDeclared,
+            Confidence = 0.8,
+            Context = new RektContext
+            {
+                IsCopybook = true,
+                DataStructure =
+                {
+                    new RektDataItem { Level = 88, Name = "FBK-TOKEN-OK" },
+                    new RektDataItem { Level = 88, Name = "FBK-TOKEN-BAD" },
+                },
+            },
+        };
+
+        const string java = "public class Feedback { boolean fbkTokenOk; }";
+
+        var result = ConversionParityValidator.Evaluate("FEEDBACK.cpy", "Feedback.java", java, context, null);
+
+        result.Outcome.Should().Be(ParityOutcome.Evaluated);
+        result.Score.Should().Be(0.5);
+        result.Gaps.Should().ContainSingle(g => g.Symbol == "FBK-TOKEN-BAD")
+            .Which.Detail.Should().Contain("Condition name");
+    }
+
+    [Fact]
     public void Evaluate_ProcedureDivisionRegistersAreExcluded()
     {
         var context = new StructuralContext

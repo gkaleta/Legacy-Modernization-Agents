@@ -17,6 +17,7 @@ The namespace is `{root}.Jobs` (C#) or `{root}.jobs` (Java), under the same root
 
 - the programs it runs;
 - which of them the converted code already implements through the batch-program contract, and which it does not yet;
+- which of those not yet implemented have no COBOL source in the estate (`programsWithoutSource`): a program in another language, such as PL/I, or one that was never supplied. No conversion produces these; add the source or implement the batch-program contract by hand;
 - the steps that cannot run (a procedure that is not in the source, an unsupported utility, or a condition that could not be read);
 - the parser's diagnostics.
 

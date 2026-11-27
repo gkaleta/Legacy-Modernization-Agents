@@ -126,6 +126,8 @@ public static class DoctorReports
         {
             var job = (string)Required(entry, "job");
             var missing = Strings(entry, "programsMissing").ToList();
+            var noSource = entry["programsWithoutSource"] is JsonArray ? Strings(entry, "programsWithoutSource").ToList() : [];
+            var notYet = missing.Where(p => !noSource.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
             var blocked = (entry["stepsNotRunnable"] as JsonArray)?.Count ?? 0;
             var programs = (entry["programs"] as JsonArray)?.Count ?? 0;
             if (missing.Count == 0 && blocked == 0)
@@ -139,9 +141,11 @@ public static class DoctorReports
             {
                 programs > 0
                     ? $"{(entry["programsImplemented"] as JsonArray)?.Count ?? 0}/{programs} program(s) converted"
-                      + (missing.Count > 0 ? $", not yet: {string.Join(", ", missing)}" : "")
+                      + (notYet.Count > 0 ? $", not yet: {string.Join(", ", notYet)}" : "")
                     : "no resolved estate programs",
             };
+            if (noSource.Count > 0)
+                parts.Add($"no COBOL source in the estate for {string.Join(", ", noSource)}");
             if (blocked > 0)
                 parts.Add($"{blocked} step(s) cannot run (missing procedure, unsupported utility or unreadable condition)");
             text.Append($"  ⚠️  {job,-10} {string.Join("; ", parts)}\n");

@@ -68,7 +68,7 @@ An axis with at least one expected symbol and **no code match at all** is theref
 
 ## What is deliberately not scored
 
-- `FILLER`, level-88 condition names, level-66 renames and generated `TypedRecord*` types are excluded from `dataFields`. They are not storage a conversion is expected to reproduce.
+- `FILLER`, level-88 condition names, level-66 renames and generated `TypedRecord*` types are excluded from `dataFields`. They are not storage a conversion is expected to reproduce. When a source declares no storage fields at all, such as a copybook of only condition names (IBM's `CEEIGZCT`), its condition names are compared on `dataFields` instead, because they are the whole contract.
 - Data nodes attributed to the `PROCEDURE DIVISION` are excluded. The parser surfaces COBOL special registers such as `WHEN-COMPILED` as data items with `sourceSection: PROCEDURE_DIVISION`; they are injected by the compiler, not declared by the program, so no conversion can carry them. Real storage always carries `WORKING_STORAGE`, `LINKAGE` or `FILE`.
 - Fields declared only by an auto-generated stub copybook are excluded — see *Evidence quality* below.
 - A `PERFORM ... UNTIL` operand that is also a data field is dropped from `procedures`; it names a condition, not a paragraph.

@@ -346,6 +346,15 @@ internal static class ConversionParityValidator
         var found = new List<(string Name, string? Section)>();
         foreach (var item in ctx.DataStructure) FlattenDataItem(item, found, null);
 
+        // A copybook of bare condition names (IBM's CEEIGZCT feedback-token list) has no storage
+        // of its own, so its names are the whole contract. Skipping them left it unmeasured.
+        var conditionNamesOnly = false;
+        if (found.Count == 0)
+        {
+            foreach (var item in ctx.DataStructure) FlattenConditionNames(item, found, null);
+            conditionNamesOnly = found.Count > 0;
+        }
+
         var sections = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, section) in found) sections.TryAdd(name, section);
 
@@ -354,8 +363,21 @@ internal static class ConversionParityValidator
 
         return distinct
             .Where(n => !stubCopybooks.Contains(n))
-            .Select(n => new ExpectedSymbol(n, detail: DescribeSection(sections.GetValueOrDefault(n))))
+            .Select(n => new ExpectedSymbol(n, detail: conditionNamesOnly
+                ? "Condition name (level 88); the source declares no storage fields."
+                : DescribeSection(sections.GetValueOrDefault(n))))
             .ToList();
+    }
+
+    private static void FlattenConditionNames(
+        RektDataItem item, List<(string Name, string? Section)> into, string? inheritedSection)
+    {
+        var name = item.Name?.Trim() ?? "";
+        var section = item.SourceSection ?? inheritedSection;
+        if (item.Level == 88 && name.Length > 0 && !IsProcedureRegister(item))
+            into.Add((name, section));
+
+        foreach (var child in item.Children) FlattenConditionNames(child, into, section);
     }
 
     // A LINKAGE field is supplied by the caller, so a program that only reads it through a

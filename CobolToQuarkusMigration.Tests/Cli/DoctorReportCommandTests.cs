@@ -77,6 +77,19 @@ public sealed class DoctorReportCommandTests : IDisposable
     }
 
     [Fact]
+    public void JclJobSummary_SeparatesProgramsWithNoCobolSource()
+    {
+        var manifest = Path.Join(_root, "jobs-manifest.json");
+        File.WriteAllText(manifest, """
+            [{"job":"STMT","file":"jcl/STMT.jcl","programs":["A","B","C"],"programsImplemented":["A"],
+              "programsMissing":["B","C"],"programsWithoutSource":["C"],"stepsNotRunnable":[]}]
+            """);
+
+        DoctorReports.JclJobSummary(manifest, [""]).Should()
+            .Contain("  ⚠️  STMT       1/3 program(s) converted, not yet: B; no COBOL source in the estate for C\n");
+    }
+
+    [Fact]
     public void ProgramList_ShowsMissingCopybooks()
     {
         var table = DoctorReports.ProgramList("""

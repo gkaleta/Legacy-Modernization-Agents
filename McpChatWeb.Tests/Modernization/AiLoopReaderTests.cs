@@ -784,6 +784,21 @@ public sealed class AiLoopReaderTests : IDisposable
         Assert.Contains("JOBB: needs Z", gate.Details);
     }
 
+    [Fact]
+    public async Task AJclProgramWithNoCobolSourceIsNamedAsSuch()
+    {
+        ACompletedRun();
+        Artifact(JclJobWriter.ManifestFile, JsonSerializer.Serialize(new[]
+        {
+            new JclJobManifestEntry("JOBC", "Jobs/JobC.cs", "JobC", ["C", "Y", "Z"], ["C"], ["Y", "Z"], [], [], ["Z"]),
+        }, JclEstate.JsonOptions));
+
+        var gate = Gate(await Reader().GetRunAsync("7"), "jcl");
+
+        Assert.Equal("warn", gate.Status);
+        Assert.Contains("JOBC: not converted: Y; no COBOL source in the estate for Z", gate.Details);
+    }
+
     [Theory]
     [InlineData("source")]
     [InlineData("../elsewhere")]

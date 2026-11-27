@@ -847,11 +847,18 @@ public sealed partial class AiLoopReader
             if (jobs.Count == 0) return new(id, title, "not-run", "The manifest lists no jobs", [], Rel(path));
             var blocked = jobs.Where(j => j.ProgramsMissing.Count > 0 || j.StepsNotRunnable.Count > 0).ToList();
             var details = blocked.Take(10).Select(j =>
-                $"{j.Job}: " + string.Join("; ", new[]
+            {
+                var noSource = j.ProgramsWithoutSource ?? [];
+                var notConverted = j.ProgramsMissing.Where(p => !noSource.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+                return $"{j.Job}: " + string.Join("; ", new[]
                 {
-                    j.ProgramsMissing.Count > 0 ? $"needs {string.Join(", ", j.ProgramsMissing)}" : null,
+                    notConverted.Count > 0
+                        ? (j.ProgramsWithoutSource is null ? "needs " : "not converted: ") + string.Join(", ", notConverted)
+                        : null,
+                    noSource.Count > 0 ? $"no COBOL source in the estate for {string.Join(", ", noSource)}" : null,
                     j.StepsNotRunnable.Count > 0 ? $"{j.StepsNotRunnable.Count} step(s) not runnable" : null,
-                }.Where(x => x is not null))).ToList();
+                }.Where(x => x is not null));
+            }).ToList();
             var status = blocked.Count == 0 ? "pass" : "warn";
             return new(id, title, status, $"{jobs.Count - blocked.Count}/{jobs.Count} job(s) can run end to end", details, Rel(path));
         }
