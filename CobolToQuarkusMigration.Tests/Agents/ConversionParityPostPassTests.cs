@@ -66,6 +66,45 @@ public class ConversionParityPostPassTests : IDisposable
     }
 
     [Fact]
+    public async Task Repair_AnEmptyAnswerDoesNotEndRepair_AndTheNextRoundIsToldWhy()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"parity-repair-{Guid.NewGuid():N}.java");
+        Environment.SetEnvironmentVariable("PARITY_REPAIR_MAX_ROUNDS", "2");
+        const string before = "package example; class Record { int existingValue; }";
+        const string candidate = "package example; class Record { int existingValue; int requiredValue; }";
+        var context = new CobolToQuarkusMigration.Helpers.StructuralContext
+        {
+            Provenance = CobolToQuarkusMigration.Helpers.StructuralProvenance.SourceDeclared,
+            Context = new()
+            {
+                IsCopybook = true,
+                DataStructure = [new() { Level = 5, Name = "REQUIRED-VALUE" }]
+            }
+        };
+        ProgramParityResult Evaluate(IReadOnlyDictionary<string, string> files) =>
+            ConversionParityValidator.Evaluate("RECORD.cpy", path, string.Join("\n", files.Values), context, null);
+        var current = new Dictionary<string, string> { [path] = before };
+        var requests = new List<ParityRepairRequest>();
+        try
+        {
+            await File.WriteAllTextAsync(path, before);
+            var result = await ConversionParityPostPass.RepairAsync(Evaluate(current), "05 REQUIRED-VALUE PIC 9.",
+                current, "Java", 0.75, request =>
+                {
+                    requests.Add(request);
+                    return Task.FromResult<IReadOnlyDictionary<string, string>?>(requests.Count == 1
+                        ? null : new Dictionary<string, string> { [path] = candidate });
+                }, Evaluate);
+            result.AcceptedRepairs.Should().Be(1);
+            result.RepairAttempts.Should().Be(2);
+            requests[0].PreviousAttempt.Should().BeNull();
+            requests[1].PreviousAttempt.Should().Be("Repair produced no usable candidate.");
+            (await File.ReadAllTextAsync(path)).Should().Be(candidate);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public async Task RunAsync_StrictGateRejectsPartiallyUnknownEvidenceAndArtifactWriteFailure()
     {
         var root = Path.Combine(Path.GetTempPath(), $"parity-strict-{Guid.NewGuid():N}");

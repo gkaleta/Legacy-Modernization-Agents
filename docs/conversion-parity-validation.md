@@ -222,7 +222,7 @@ After compiler repairs, parity is measured again from the files actually on disk
 |---|---|---|
 | `MIN_PROGRAM_SCORE` | `0.75` | Score below which a program is counted as below threshold. Clamped to `[0,1]`; an unparseable value logs a warning and falls back to the default. |
 | `ON_LOW_SCORE` | `warn` | `warn` reports only. `stop` additionally sets exit code `4`. |
-| `PARITY_REPAIR_MAX_ROUNDS` | `2` | Maximum repair attempts per source; `0` measures only. Invalid or negative repair limits are rejected. |
+| `PARITY_REPAIR_MAX_ROUNDS` | `2` | Maximum repair attempts per source; `0` measures only. A rejected or empty answer uses an attempt, and the next attempt is told why. Invalid or negative repair limits are rejected. |
 
 Under `stop`, the migration pipeline also rejects sources that could not be evaluated. Missing evidence is not a pass. Missing or diagnostic-only conversions fail completion even under `warn`; the policy controls structural-score acceptance, not whether source coverage may be silently omitted.
 

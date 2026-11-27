@@ -261,7 +261,7 @@ public static class ConversionParityPostPass
             cancellationToken.ThrowIfCancellationRequested();
             attempts++;
             IReadOnlyDictionary<string, string>? candidate;
-            try { candidate = await repair(new(result.Program, language, source, current, result)).WaitAsync(cancellationToken); }
+            try { candidate = await repair(new(result.Program, language, source, current, result, PreviousAttempt: note)).WaitAsync(cancellationToken); }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger?.LogWarning(ex, "Parity repair failed for {Program}; retaining original output.", result.Program);
@@ -271,7 +271,7 @@ public static class ConversionParityPostPass
             if (candidate is null)
             {
                 note = "Repair produced no usable candidate.";
-                break;
+                continue;
             }
             if (!current.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(candidate.Keys)
                 || candidate.Any(pair => string.IsNullOrWhiteSpace(pair.Value)

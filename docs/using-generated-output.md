@@ -35,13 +35,13 @@ not independent evidence, and must not be presented as verification.
 ## Compile gate
 
 When `CompileGate.Enabled` is set (the default), a C# run ends with `dotnet build` on the output.
-Errors are repaired file by file and the build is repeated, for at most `MaxRepairRounds` rounds.
+Errors are repaired file by file and the build is repeated, for at most `MaxRepairRounds` rounds. A round in which every answer was rejected, or that was undone, does not end repair early: the next round asks again and tells the model why its last answer was not kept.
 The result goes to `compile-status.json` and the migration report. All limits live in the
 `CompileGate` section of `Config/appsettings.json`.
 
 Both direct and chunked Java migrations also receive a Maven scaffold, including ordinary conversions with no JCL. The compiler target remains Java 17. The ordinary build adds only detected compile dependencies, not a new application framework or a batch runtime. Existing JCL-generated Spring Batch builds remain intact. Hand-written POMs are preserved; remove the generated-file marker before customizing a generated POM.
 
-The Java gate runs `mvn -B -q -Dstyle.color=never -DskipTests compile` and trusts its actual exit status, not the absence of parsed diagnostics. Missing Maven/POM, dependency-resolution failure, timeout and cancellation are non-success. Source-backed compiler repair is bounded by `CompileGate.MaxRepairRounds`; non-improving rounds restore the originals. Repair cannot modify files without a unique generated-path/source-path mapping, and does not synthesize missing business contracts.
+The Java gate runs `mvn -B -q -Dstyle.color=never -DskipTests compile` and trusts its actual exit status, not the absence of parsed diagnostics. Missing Maven/POM, dependency-resolution failure, timeout and cancellation are non-success. Source-backed compiler repair is bounded by `CompileGate.MaxRepairRounds`; non-improving rounds restore the originals, and the next round retries those files with the reason. Repair cannot modify files without a unique generated-path/source-path mapping, and does not synthesize missing business contracts.
 
 Java compiler repairs use the parity repair agent with Java/framework-specific
 instructions, the original COBOL, actual compiler diagnostics, peer declarations

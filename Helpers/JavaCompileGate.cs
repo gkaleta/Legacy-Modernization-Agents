@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CobolToQuarkusMigration.Agents;
@@ -39,6 +40,9 @@ public static class JavaCompileGate
         try
         {
             var maxRounds = Math.Max(0, settings.MaxRepairRounds);
+            // Why a file's last candidate was not kept. A rejected or rolled-back round used to end
+            // repair with rounds to spare; the next round now tries again and is told what went wrong.
+            var feedback = new Dictionary<string, string>(StringComparer.Ordinal);
             result = await BuildAsync(folder, Timeout(settings), executable, cancellationToken);
             Record(result);
             AiLoopEvents.ProgressUpdate(0, maxRounds, result.Compiled ? "First build compiled"
@@ -91,11 +95,13 @@ public static class JavaCompileGate
                             await File.ReadAllTextAsync(file.OriginalSourcePath, cancellationToken),
                             new Dictionary<string, string> { [path] = before },
                             new ProgramParityResult { Program = file.OriginalCobolFileName, Outcome = ParityOutcome.NotEvaluated },
-                            group.ToList(), related)).WaitAsync(cancellationToken);
+                            group.ToList(), related,
+                            PreviousAttempt: feedback.GetValueOrDefault(path))).WaitAsync(cancellationToken);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         logger.LogWarning(ex, "Compiler repair failed for {File}; retaining original output.", group.Key);
+                        feedback[path] = "the repair request failed: " + ex.Message;
                         continue;
                     }
                     var after = candidate is not null && candidate.Count == 1 && candidate.TryGetValue(path, out var proposed)
@@ -108,12 +114,21 @@ public static class JavaCompileGate
                     if (rejection is not null)
                     {
                         logger.LogWarning("Compiler repair rejected for {File}: {Reason}.", group.Key, rejection);
+                        feedback[path] = "it was rejected because " + rejection;
                         continue;
                     }
                     originals[path] = before;
                     candidates[path] = after!;
                 }
-                if (originals.Count == 0) break;
+                if (!startedRound) break;
+                if (originals.Count == 0)
+                {
+                    Record(result, rolledBack: true);
+                    AiLoopEvents.ProgressUpdate(round, maxRounds, $"Repair round {round}: no candidate kept; "
+                        + $"{result.Errors.Count} compile error(s) remain");
+                    logger.LogWarning("Java compile repair round {Round}: no candidate was kept.", round);
+                    continue;
+                }
                 JavaCompileResult measured;
                 try
                 {
@@ -129,6 +144,7 @@ public static class JavaCompileGate
                             round, broken.Count, string.Join(", ", broken.Select(path => Path.GetRelativePath(folder, path))));
                         foreach (var path in broken)
                         {
+                            feedback[path] = "it introduced Java syntax errors, so javac could not check the rest of the project";
                             await File.WriteAllTextAsync(path, originals[path], CancellationToken.None);
                             originals.Remove(path);
                             candidates.Remove(path);
@@ -151,9 +167,13 @@ public static class JavaCompileGate
                     await RestoreAsync(originals);
                     logger.LogWarning("Java compile repair round {Round} rolled back: {Reason}.", round,
                         candidates.Count == 0 ? "every candidate introduced syntax errors" : "compiler failures did not decrease");
+                    foreach (var path in candidates.Keys)
+                        feedback[path] = string.Create(CultureInfo.InvariantCulture,
+                            $"the build with it had {(measured.Measured ? measured.Errors.Count.ToString(CultureInfo.InvariantCulture) : "unmeasured")} compile error(s), not fewer than the {result.Errors.Count} before");
                     result = await BuildAsync(folder, Timeout(settings), executable, cancellationToken);
-                    break;
+                    continue;
                 }
+                foreach (var path in candidates.Keys) feedback.Remove(path);
                 Record(measured);
                 AiLoopEvents.ProgressUpdate(round, maxRounds, measured.Compiled
                     ? $"Repair round {round}: compiled ({result.Errors.Count} error(s) before)"

@@ -12,7 +12,8 @@ public sealed record ParityRepairRequest(
     IReadOnlyDictionary<string, string> Files, ProgramParityResult Evidence,
     IReadOnlyList<Helpers.CompilerDiagnostic>? CompilerDiagnostics = null,
     IReadOnlyDictionary<string, string>? RelatedFiles = null,
-    IReadOnlyList<RuntimeImplementationRequirement>? RuntimeRequirements = null);
+    IReadOnlyList<RuntimeImplementationRequirement>? RuntimeRequirements = null,
+    string? PreviousAttempt = null);
 
 public sealed class ParityRepairAgent : AgentBase
 {

@@ -33,7 +33,11 @@ public sealed class CompileRepairAgent : AgentBase
             : new CompileRepairAgent(chatClient!, logger, modelId, enhancedLogger, chatLogger, settings);
 
     /// <summary>The repaired source, or <c>null</c> when no acceptable repair came back.</summary>
-    public async Task<string?> RepairAsync(CompileRepairTask task, string source)
+    public async Task<string?> RepairAsync(CompileRepairTask task, string source) =>
+        (await RepairWithReasonAsync(task, source)).Repaired;
+
+    // The reason travels back so the gate can tell the next round what was wrong with this answer.
+    public async Task<(string? Repaired, string? Rejection)> RepairWithReasonAsync(CompileRepairTask task, string source)
     {
         var system = PromptLoader.LoadSectionValidated("CompileRepair", "System", new Dictionary<string, string>());
         var user = PromptLoader.LoadSectionValidated("CompileRepair", "User", new Dictionary<string, string>
@@ -55,7 +59,7 @@ public sealed class CompileRepairAgent : AgentBase
         if (usedFallback || string.IsNullOrWhiteSpace(response))
         {
             Logger.LogWarning("[{Agent}] No repair for {File}: {Reason}", AgentName, task.File, reason ?? "empty response");
-            return null;
+            return (null, "no repair came back (" + (reason ?? "empty response") + ")");
         }
 
         var repaired = GeneratedCSharpSyntax.FixAccessorTerminators(GeneratedCodeEntities.DecodeInCode(
@@ -65,10 +69,10 @@ public sealed class CompileRepairAgent : AgentBase
         if (rejection is not null)
         {
             Logger.LogWarning("[{Agent}] Rejected repair of {File}: {Reason}", AgentName, task.File, rejection);
-            return null;
+            return (null, "it was rejected because " + rejection);
         }
 
-        return repaired;
+        return (repaired, null);
     }
 
     /// <summary>Why a repair is unacceptable, or <c>null</c> when it may be written.</summary>

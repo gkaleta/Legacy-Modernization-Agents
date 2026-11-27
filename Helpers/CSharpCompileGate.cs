@@ -94,6 +94,9 @@ public static class CSharpCompileGate
         BuildOutcome? previous = null;
         var undo = new Dictionary<string, string>(StringComparer.Ordinal);
         var round = 0;
+        // Why a file's last repair was not kept. A rejected or undone round used to end repair with
+        // rounds to spare; the next round now tries again and is told what went wrong.
+        var feedback = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
 
         if (callTargets is not null)
             GeneratedProjectScaffold.Write(runFolder, rootNamespace, callTargets: callTargets, sharedNamespace: sharedNamespace);
@@ -106,17 +109,20 @@ public static class CSharpCompileGate
 
             if (previous is not null && IsWorse(outcome.Errors, previous.Errors))
             {
-                // A round must not leave the code worse than it found it. Its files are restored and
-                // repair stops, since the same plan would be tried again.
+                // A round must not leave the code worse than it found it. Its files are restored, and
+                // the next round is told so that it does not try the same repairs again.
                 logger.LogWarning("[CompileGate] Round {Round}: {Errors} error(s), more than {Before}; undoing its repairs",
                     round, outcome.Errors.Count, previous.Errors.Count);
                 foreach (var (file, text) in undo)
+                {
                     await File.WriteAllTextAsync(Path.Join(runFolder, file), text, cancellationToken);
+                    feedback[file] = $"the build with it had {outcome.Errors.Count} compiler error(s), more than the {previous.Errors.Count} before, so it was undone";
+                }
                 GeneratedProjectScaffold.Write(runFolder, rootNamespace, callTargets: callTargets, sharedNamespace: sharedNamespace);
                 rounds = [.. rounds, new CompileRound(round, outcome.Errors.Count, 0, 0,
                     outcome.Errors.GroupBy(e => e.Code).ToDictionary(g => g.Key, g => g.Count()), RolledBack: true)];
                 outcome = previous;
-                break;
+                previous = null;
             }
 
             logger.LogInformation("[CompileGate] Round {Round}: {Errors} compiler error(s)", round, outcome.Errors.Count);
@@ -165,8 +171,18 @@ public static class CSharpCompileGate
                 await gate.WaitAsync(cancellationToken);
                 try
                 {
-                    var result = await repairAgent.RepairAsync(task, sources[task.File]);
-                    if (result is null) { Interlocked.Increment(ref rejected); return; }
+                    var asked = feedback.TryGetValue(task.File, out var last)
+                        ? task with { Instructions = [.. task.Instructions,
+                            $"Your previous repair of this file was not kept: {last}. Do not repeat it; make a different, smaller fix."] }
+                        : task;
+                    var (result, rejection) = await repairAgent.RepairWithReasonAsync(asked, sources[task.File]);
+                    if (result is null)
+                    {
+                        feedback[task.File] = rejection ?? "no repair came back";
+                        Interlocked.Increment(ref rejected);
+                        return;
+                    }
+                    feedback.TryRemove(task.File, out _);
                     lock (undo) undo.TryAdd(task.File, sources[task.File]);
                     await File.WriteAllTextAsync(Path.Join(runFolder, task.File), result, cancellationToken);
                     logger.LogInformation("[CompileGate] Round {Round}: repaired {File}", round, task.File);
@@ -179,7 +195,8 @@ public static class CSharpCompileGate
             }));
 
             rounds = Append(rounds, round, outcome, repaired, rejected);
-            if (repaired == 0) break; // Nothing changed, so another build would report the same.
+            // Nothing asked means nothing to try again; rejected answers get another round with the reason.
+            if (repaired == 0 && rejected == 0) break;
 
             // A repair can introduce a framework type or a second namespace; scaffold again so the
             // next build judges the code, not stale scaffolding.

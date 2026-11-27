@@ -16,6 +16,8 @@ business contracts from a truncated declaration.
 Never invent missing copybook fields, types, sizes, constants or behavior to improve a score
 or satisfy compilation. Preserve explicit missing-dependency diagnostics until genuine
 definitions are supplied.
+When PreviousAttempt is set, your last answer for these files was not kept, for the reason
+it gives. Do not repeat that answer; make a different, smaller fix that avoids the reason.
 
 ## SECTION: Java
 

@@ -168,6 +168,43 @@ public sealed class JavaCompileGateTests : IDisposable
         result.Rounds[1].RolledBack.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("public class Record {}", "rejected because public or protected fields lost")]
+    [InlineData("public class Record { public int value = broken + 1; }", "not fewer than the 1 before")]
+    public async Task Run_ANotKeptRoundIsFollowedByAnotherThatIsToldWhy(string firstCandidate, string reason)
+    {
+        var executable = await FakeMavenAsync(
+            "if ! grep -q broken Record.java; then exit 0; fi\n" +
+            "printf '[ERROR] Record.java:[1,1] cannot find symbol: broken\\n'\nexit 1\n",
+            "findstr broken Record.java >nul\r\nif errorlevel 1 exit /b 0\r\n" +
+            "echo [ERROR] Record.java:[1,1] cannot find symbol: broken\r\nexit /b 1\r\n");
+        var source = Path.Combine(_root, "RECORD.cpy");
+        var generated = Path.Combine(_root, "Record.java");
+        const string fixedRecord = "public class Record { public int value = 1; }";
+        await File.WriteAllTextAsync(source, "       01 RECORD.\n          05 VALUE PIC 9 VALUE 1.");
+        await File.WriteAllTextAsync(generated, "public class Record { public int value = broken; }");
+        var requests = new List<ParityRepairRequest>();
+
+        var result = await JavaCompileGate.RunAsync(_root, new CompileGateSettings { MaxRepairRounds = 3 },
+            NullLogger.Instance, executable: executable,
+            generatedFiles: [new CodeFile { FilePath = generated, OriginalSourcePath = source }],
+            repair: request =>
+            {
+                requests.Add(request);
+                return Task.FromResult<IReadOnlyDictionary<string, string>?>(
+                    new Dictionary<string, string> { [generated] = requests.Count == 1 ? firstCandidate : fixedRecord });
+            });
+
+        result.Compiled.Should().BeTrue();
+        requests.Should().HaveCount(2);
+        requests[0].PreviousAttempt.Should().BeNull();
+        requests[1].PreviousAttempt.Should().Contain(reason);
+        (await File.ReadAllTextAsync(generated)).Should().Be(fixedRecord);
+        result.Rounds.Should().HaveCount(3);
+        result.Rounds[1].RolledBack.Should().BeTrue();
+        result.Rounds[2].RolledBack.Should().BeFalse();
+    }
+
     [Fact]
     public void Guard_RejectsRemovalOfPublicField()
     {

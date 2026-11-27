@@ -30,7 +30,7 @@ flowchart TB
     DEPS --> CONV["Java or C# converter agent<br/>(chunked for large programs)"]
     CONV --> GUARD["Output guard<br/>each answer must be complete code,<br/>not truncated or empty"]
     GUARD --> GATE{"C#: compile gate<br/>dotnet build"}
-    GATE -->|errors| REPAIR["CompileRepairAgent<br/>fixes file by file,<br/>up to CompileGate.MaxRepairRounds,<br/>undoes rounds that make it worse"]
+    GATE -->|errors| REPAIR["CompileRepairAgent<br/>fixes file by file,<br/>up to CompileGate.MaxRepairRounds,<br/>undoes rounds that make it worse,<br/>retries with the reason"]
     REPAIR --> GATE
     GATE -->|builds, or rounds used up| PARITY["Conversion parity check<br/>procedures · fields · calls · SQL<br/>vs the COBOL (deterministic)"]
     PARITY -->|gaps| PREPAIR["ParityRepairAgent<br/>source-backed fixes, up to PARITY_REPAIR_MAX_ROUNDS;<br/>kept only if rescoring improves"]
@@ -313,12 +313,12 @@ sequenceDiagram
 ### CompileRepairAgent
 - **Purpose:** Fix C# compiler errors in generated files, one file at a time.
 - **Inputs:** `dotnet build` diagnostics and the affected files.
-- **Outputs:** Repaired files; a round that increases the error count is undone. Limited by `CompileGate.MaxRepairRounds`.
+- **Outputs:** Repaired files; a round that increases the error count is undone. A rejected or undone repair does not end repair: the next round asks again for that file and says why the last answer was not kept. Limited by `CompileGate.MaxRepairRounds`.
 
 ### ParityRepairAgent
 - **Purpose:** Close gaps the deterministic parity check found between the COBOL and the generated code.
 - **Inputs:** The COBOL source, the generated files, the measured gaps and read-only compiler context.
-- **Outputs:** Replacement files, accepted only when rescoring shows higher coverage without loss on another axis. Limited by `PARITY_REPAIR_MAX_ROUNDS` (`0` measures only). See [Conversion parity](conversion-parity-validation.md#bounded-repair-and-final-measurement).
+- **Outputs:** Replacement files, accepted only when rescoring shows higher coverage without loss on another axis. Limited by `PARITY_REPAIR_MAX_ROUNDS` (`0` measures only); a rejected or empty answer uses up one attempt and the next attempt is told why (`PreviousAttempt`). See [Conversion parity](conversion-parity-validation.md#bounded-repair-and-final-measurement).
 
 ## ⚡ Concurrency Notes
 - **Pipeline concurrency (`--max-parallel`)** controls how many files/chunks run simultaneously (e.g., 8).

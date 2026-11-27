@@ -113,6 +113,19 @@ public sealed class CompileRepairSourceIdentityTests : IDisposable
         plan.Should().Throw<InvalidOperationException>().WithMessage("*Ambiguous COBOL member names*");
     }
 
+    [Fact]
+    public async Task ARejectedRepairReportsWhy_SoTheNextRoundCanBeTold()
+    {
+        var task = new CompileRepairTask("A.cs", [new CompilerDiagnostic("A.cs", 2, 1, "CS1002", "; expected")], [], [], new HashSet<string>());
+        using var client = new RecordingClient { Response = "namespace S;\npublic class Other { }\n" };
+        var agent = CompileRepairAgent.Create(null, client, NullLogger.Instance, "reason-test-" + Guid.NewGuid().ToString("N"));
+
+        var (repaired, rejection) = await agent.RepairWithReasonAsync(task, "namespace S;\npublic class Keep { }\n");
+
+        repaired.Should().BeNull();
+        rejection.Should().StartWith("it was rejected because").And.Contain("Keep");
+    }
+
     private async Task<(List<CodeFile> Generated, List<CobolFile> Originals, Dictionary<string, string> Sources)> CreateSources()
     {
         var originals = new List<CobolFile>

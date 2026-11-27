@@ -341,7 +341,7 @@ flowchart TD
 2. **Reverse engineering** (`run` and `reverse-eng`): **CobolAnalyzerAgent** describes each program's structure and logic, and **BusinessLogicExtractorAgent** turns that into use cases, business rules and a glossary. Both are stored in SQLite; `--reuse-re` reuses them in later runs.
 3. **Dependencies:** **DependencyMapperAgent** records CALL, COPY, file and SQL relationships in Neo4j.
 4. **Conversion:** the **Java or C# converter agent** writes the target code, splitting large programs into chunks. The **output guard** rejects empty, truncated or placeholder answers before anything is written.
-5. **Compile gate:** the output is built (`dotnet build` or `mvn compile`). Compiler errors go to a repair agent file by file, for at most `CompileGate.MaxRepairRounds` rounds; a round that makes things worse is undone.
+5. **Compile gate:** the output is built (`dotnet build` or `mvn compile`). Compiler errors go to a repair agent file by file, for at most `CompileGate.MaxRepairRounds` rounds; a round that makes things worse is undone, and a file whose repair was rejected or undone is tried again in the next round, told why.
 6. **Parity:** a deterministic check compares procedures, fields, calls and SQL in the output with the COBOL. **ParityRepairAgent** fills the gaps it finds, and a fix is kept only if the re-measured score improves.
 7. **Report:** results land in `output/<language>/<run>/` (`compile-status.json`, `conversion-parity.json`, migration report), and the **🔁 AI Loop** tab shows every call, retry and gate, with a progress bar for the step that is running (for example compile repair round 2 of 5, or parity program 12 of 55).
 
