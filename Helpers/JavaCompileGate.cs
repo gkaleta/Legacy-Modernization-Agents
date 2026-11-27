@@ -75,7 +75,13 @@ public static class JavaCompileGate
                     var related = new Dictionary<string, string>();
                     var pom = Path.Combine(folder, JavaProjectScaffold.PomFile);
                     related[pom] = await File.ReadAllTextAsync(pom, cancellationToken);
+                    // A missing member is usually called on a class in another package (a shared copybook
+                    // type), so same-package peers alone never show the model the names that really exist.
+                    foreach (var typePath in ReferencedTypeFiles(folder, group))
+                        if (typePath != path)
+                            related[typePath] = PublicSurface(await File.ReadAllTextAsync(typePath, cancellationToken));
                     foreach (var peer in (generatedFiles ?? []).Where(peer => peer.FilePath != path
+                        && !related.ContainsKey(peer.FilePath)
                         && File.Exists(peer.FilePath) && PackageOf(peer.Content) == PackageOf(before))
                         .Take(Math.Max(0, settings.MaxDeclarationsPerRepair)))
                     {
@@ -333,11 +339,31 @@ public static class JavaCompileGate
         }).ToList();
     }
 
+    // javac puts the missing name and the type it was looked up on in follow-up lines; without them
+    // every error reads only "cannot find symbol" and repair cannot tell what to rename.
     internal static IReadOnlyList<CompilerDiagnostic> Parse(string output, string folder) =>
-        Regex.Matches(output, @"(?m)^\[ERROR\]\s+(?<file>.+?\.java):\[(?<line>\d+),(?<column>\d+)\]\s*(?<message>.+)$")
+        Regex.Matches(output, @"(?m)^\[ERROR\]\s+(?<file>.+?\.java):\[(?<line>\d+),(?<column>\d+)\]\s*(?<message>.+?)\r?$"
+                + @"(?:\n(?:\[ERROR\])?[ \t]+symbol:\s*(?<symbol>.+?)\r?$)?(?:\n(?:\[ERROR\])?[ \t]+location:\s*(?<location>.+?)\r?$)?")
             .Select(match => new CompilerDiagnostic(RelativeFile(match.Groups["file"].Value, folder),
                 int.Parse(match.Groups["line"].Value), int.Parse(match.Groups["column"].Value),
-                "javac", match.Groups["message"].Value.Trim())).Distinct().ToList();
+                "javac", match.Groups["message"].Value.Trim()
+                    + (match.Groups["symbol"].Success ? ": " + Regex.Replace(match.Groups["symbol"].Value.Trim(), @"\s+", " ") : "")
+                    + (match.Groups["location"].Success ? " (location: " + Regex.Replace(match.Groups["location"].Value.Trim(), @"\s+", " ") + ")" : "")))
+            .Distinct().ToList();
+
+    internal static IEnumerable<string> ReferencedTypeFiles(string folder, IEnumerable<CompilerDiagnostic> errors) =>
+        errors.SelectMany(error => Regex.Matches(error.Message, @"\(location: (?:.+? of type |class |interface )(?<type>[\w.]+)")
+                .Select(match => match.Groups["type"].Value))
+            .Distinct(StringComparer.Ordinal)
+            .Select(type => Path.GetFullPath(Path.Combine(folder, type.Replace('.', Path.DirectorySeparatorChar) + ".java")))
+            .Where(file => IsInside(folder, file) && File.Exists(file));
+
+    // Only the names a caller can use: the package, type headers and public member signatures, so a
+    // large shared class fits in the prompt in full instead of being cut after its first lines.
+    internal static string PublicSurface(string code) => string.Join('\n', code.Split('\n')
+        .Select(line => line.TrimEnd('\r'))
+        .Where(line => Regex.IsMatch(line, @"^\s*(package\s|public\s|protected\s)"))
+        .Select(line => Regex.Replace(line, @"\s*\{.*$", "")));
 
     private static string RelativeFile(string path, string folder)
     {

@@ -206,6 +206,46 @@ public sealed class JavaCompileGateTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_ShowsRepairTheTypeAMissingMemberWasLookedUpOn_EvenInAnotherPackage()
+    {
+        var executable = await FakeMavenAsync(
+            "if ! grep -q getCommAccno app/Ui.java; then exit 0; fi\n" +
+            "printf '[ERROR] app/Ui.java:[3,9] cannot find symbol\\n[ERROR]   symbol:   method getCommAccno()\\n" +
+            "[ERROR]   location: variable src of type shared.Account\\n'\nexit 1\n",
+            "findstr getCommAccno app\\Ui.java >nul\r\nif errorlevel 1 exit /b 0\r\n" +
+            "echo [ERROR] app/Ui.java:[3,9] cannot find symbol\r\necho [ERROR]   symbol:   method getCommAccno()\r\n" +
+            "echo [ERROR]   location: variable src of type shared.Account\r\nexit /b 1\r\n");
+        Directory.CreateDirectory(Path.Combine(_root, "app"));
+        Directory.CreateDirectory(Path.Combine(_root, "shared"));
+        var account = Path.Combine(_root, "shared", "Account.java");
+        await File.WriteAllTextAsync(account,
+            "package shared;\npublic class Account {\n    private long accno;\n    public long getAccountAccno() {\n        return accno;\n    }\n}\n");
+        var ui = Path.Combine(_root, "app", "Ui.java");
+        var source = Path.Combine(_root, "UI.cbl");
+        await File.WriteAllTextAsync(source, "       PROCEDURE DIVISION.");
+        await File.WriteAllTextAsync(ui, "package app;\npublic class Ui {\n long a(shared.Account src) { return src.getCommAccno(); }\n}\n");
+        ParityRepairRequest? seen = null;
+
+        var result = await JavaCompileGate.RunAsync(_root, new CompileGateSettings { MaxRepairRounds = 1 },
+            NullLogger.Instance, executable: executable,
+            generatedFiles: [new CodeFile { FilePath = ui, OriginalSourcePath = source }],
+            repair: request =>
+            {
+                seen = request;
+                return Task.FromResult<IReadOnlyDictionary<string, string>?>(new Dictionary<string, string>
+                {
+                    [ui] = "package app;\npublic class Ui {\n long a(shared.Account src) { return src.getAccountAccno(); }\n}\n"
+                });
+            });
+
+        result.Compiled.Should().BeTrue();
+        seen!.CompilerDiagnostics.Should().ContainSingle().Which.Message.Should()
+            .Be("cannot find symbol: method getCommAccno() (location: variable src of type shared.Account)");
+        seen.RelatedFiles.Should().ContainKey(account);
+        seen.RelatedFiles![account].Should().Contain("public long getAccountAccno()").And.NotContain("private long accno");
+    }
+
+    [Fact]
     public void Guard_RejectsRemovalOfPublicField()
     {
         JavaCompileGate.RejectCandidate("public class Record { public int value; }",
